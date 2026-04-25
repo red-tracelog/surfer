@@ -90,15 +90,18 @@ impl SystemState {
 
         let waves_loaded = self.user.waves.is_some();
 
-        ui.menu_button("File", |ui| {
-            b("Open file...", Message::OpenFileDialog(OpenMode::Open))
-                .shortcut(
-                    self.user
-                        .config
-                        .shortcuts
-                        .format_shortcut(ShortcutAction::OpenFile),
-                )
-                .add_closing_menu(msgs, ui);
+        ui.menu_button(self.tr("menu.file"), |ui| {
+            b(
+                self.tr("file.open"),
+                Message::OpenFileDialog(OpenMode::Open),
+            )
+            .shortcut(
+                self.user
+                    .config
+                    .shortcuts
+                    .format_shortcut(ShortcutAction::OpenFile),
+            )
+            .add_closing_menu(msgs, ui);
             b("Switch file...", Message::OpenFileDialog(OpenMode::Switch))
                 .shortcut(
                     self.user
@@ -108,7 +111,7 @@ impl SystemState {
                 )
                 .add_closing_menu(msgs, ui);
             b(
-                "Reload",
+                self.tr("file.reload"),
                 Message::ReloadWaveform(self.user.config.behavior.keep_during_reload),
             )
             .shortcut(
@@ -179,7 +182,7 @@ impl SystemState {
             #[cfg(not(target_arch = "wasm32"))]
             b("Exit", Message::Exit).add_closing_menu(msgs, ui);
         });
-        ui.menu_button("View", |ui: &mut Ui| {
+        ui.menu_button(self.tr("menu.view"), |ui: &mut Ui| {
             ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
             b(
                 "Zoom in",
@@ -324,7 +327,7 @@ impl SystemState {
             });
         });
 
-        ui.menu_button("Settings", |ui| {
+        ui.menu_button(self.tr("menu.settings"), |ui| {
             ui.menu_button("Clock highlighting", |ui| {
                 clock_highlight_type_menu(ui, msgs, self.clock_highlight_type());
             });
@@ -481,7 +484,7 @@ impl SystemState {
                     msgs.push(Message::SetDinotraceStyle(!self.use_dinotrace_style()));
                 });
         });
-        ui.menu_button("Help", |ui| {
+        ui.menu_button(self.tr("menu.help"), |ui| {
             b("Quick start", Message::SetQuickStartVisible(true)).add_closing_menu(msgs, ui);
             b("Control keys", Message::SetKeyHelpVisible(true)).add_closing_menu(msgs, ui);
             b("Mouse gestures", Message::SetGestureHelpVisible(true)).add_closing_menu(msgs, ui);

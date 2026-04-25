@@ -17,11 +17,14 @@ pub struct OpenSiblingStateFileDialog {
 /// Draw a dialog that asks the user if it wants to load a state file situated in the same directory as the waveform file.
 pub(crate) fn draw_open_sibling_state_file_dialog(
     ctx: &egui::Context,
+    language: crate::config::LanguageSetting,
     dialog: OpenSiblingStateFileDialog,
     msgs: &mut Vec<Message>,
 ) {
     let mut do_not_show_again = dialog.do_not_show_again;
-    egui::Window::new("State file detected")
+    let lang = crate::i18n::resolve_language(language);
+    egui::Window::new(crate::i18n::tr(lang, "dialog.state_detected.title"))
+
             .auto_sized()
             .collapsible(false)
             .fixed_pos(ctx.content_rect().center())

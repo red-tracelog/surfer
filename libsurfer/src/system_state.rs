@@ -123,7 +123,10 @@ impl SystemState {
     pub fn new() -> Result<SystemState> {
         Self::new_inner(false)
     }
-
+    pub fn tr<'a>(&self, key: &'a str) -> &'a str {
+        let lang = crate::i18n::resolve_language(self.user.config.language);
+        crate::i18n::tr(lang, key)
+    }
     #[cfg(test)]
     pub(crate) fn new_default_config() -> Result<SystemState> {
         Self::new_inner(true)

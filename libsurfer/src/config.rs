@@ -111,6 +111,13 @@ pub enum AutoLoad {
     Ask,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Display, FromStr, PartialEq, Eq, Sequence, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LanguageSetting {
+    Auto,
+    En,
+    De,
+}
 impl AutoLoad {
     #[must_use]
     pub fn from_bool(auto_load: bool) -> Self {
@@ -130,6 +137,7 @@ pub struct SurferConfig {
     /// Mouse gesture configurations. Color and linewidth are configured in the theme using [`SurferTheme::gesture`].
     pub gesture: SurferGesture,
     pub behavior: SurferBehavior,
+    pub language: LanguageSetting,
     /// Time stamp format
     pub default_time_format: TimeFormat,
     pub default_variable_name_type: VariableNameType,
@@ -1094,7 +1102,6 @@ impl SurferConfig {
     pub fn new(_force_default_config: bool) -> Result<Self> {
         Self::new_from_toml(&include_str!("../../default_config.toml"))
     }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(force_default_config: bool) -> Result<Self> {
         use tracing::warn;

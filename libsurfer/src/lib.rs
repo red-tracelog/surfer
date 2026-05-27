@@ -30,6 +30,7 @@ pub mod fzcmd;
 pub mod graphics;
 pub mod help;
 pub mod hierarchy;
+pub mod i18n;
 pub mod keyboard_shortcuts;
 pub mod keys;
 pub mod logs;

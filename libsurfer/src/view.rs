@@ -327,7 +327,7 @@ impl SystemState {
         }
 
         if let Some(dialog) = self.user.show_open_sibling_state_file_suggestion {
-            draw_open_sibling_state_file_dialog(ui, dialog, &mut msgs);
+            draw_open_sibling_state_file_dialog(ui, self.user.config.language, dialog, &mut msgs);
         }
 
         if self.user.show_performance {

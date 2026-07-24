@@ -4,7 +4,10 @@ use crate::{
     translation::{TranslationResultExt, ValueKindExt},
     wave_container::ScopeRefExt,
 };
+use egui::DragValue;
+use egui::collapsing_header::CollapsingState;
 use egui_extras::{Column, TableBuilder};
+use egui_remixicon::icons;
 use std::rc::Rc;
 use surfer_translation_types::{TranslationPreference, Translator, ValueKind};
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,11 +33,15 @@ impl Default for MemoryViewerState {
             name: None,
             jump_to_index: String::new(),
             search_value: String::new(),
+            highlight_value: String::new(),
             index_format: MemoryViewerFormat::Decimal,
             value_format: "Hexadecimal".to_string(),
             scroll_to_row: None,
             color_values: false,
-            change_display_modes: ChangeModes::AllValues,
+            selected_value_position: None,
+            value_column_count: 1,
+            filter_mode: ChangeModes::AllValues,
+            highlight_mode: ChangeModes::AllValues,
         }
     }
 }
@@ -49,15 +56,17 @@ pub(crate) struct MemoryRow {
     index: i64,
     value: String,
     kind: ValueKind,
-    changed_values: bool,
-    change_b_selected_times: bool,
+    changed_at_cursor: bool,
+    changed_for_filter: bool,
+    changed_for_highlight: bool,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct MemoryViewerCacheKey {
     pub scope: crate::wave_container::ScopeRef,
     pub cursor: num::BigUint,
     pub value_format: String,
-    pub change_display_modes: ChangeModes,
+    pub filter_mode: ChangeModes,
+    pub highlight_mode: ChangeModes,
 }
 
 #[derive(Clone)]
@@ -108,6 +117,28 @@ fn closest_row_index(rows: &[&MemoryRow], target_index: i64) -> Option<usize> {
         .min_by_key(|(_position, row)| (row.index - target_index).abs())
         .map(|(row_index, _)| row_index)
 }
+fn value_matches(value: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim();
+
+    !pattern.is_empty() && value.to_lowercase().contains(&pattern.to_lowercase())
+}
+fn change_range(
+    mode: ChangeModes,
+    cursor: &num::BigUint,
+    markers: &std::collections::HashMap<u8, num::BigInt>,
+) -> Option<(num::BigUint, num::BigUint)> {
+    let ChangeModes::ChangedBtwCursorAndMarker(marker_index) = mode else {
+        return None;
+    };
+
+    let marker_time = markers.get(&marker_index)?.to_biguint()?;
+
+    if cursor <= &marker_time {
+        Some((cursor.clone(), marker_time))
+    } else {
+        Some((marker_time, cursor.clone()))
+    }
+}
 fn marker_combo(ui: &mut egui::Ui, id: &'static str, selected: &mut ChangeModes) {
     let selected_marker = match selected {
         ChangeModes::ChangedBtwCursorAndMarker(index) => *index,
@@ -125,6 +156,73 @@ fn marker_combo(ui: &mut egui::Ui, id: &'static str, selected: &mut ChangeModes)
                 );
             }
         });
+}
+fn change_mode_menu(ui: &mut egui::Ui, marker_id: &'static str, selected: &mut ChangeModes) {
+    ui.radio_value(selected, ChangeModes::AllValues, "None");
+
+    ui.radio_value(selected, ChangeModes::ChangedAtCursor, "Cursor");
+
+    let marker_index = match *selected {
+        ChangeModes::ChangedBtwCursorAndMarker(index) => index,
+        _ => 1,
+    };
+
+    ui.radio_value(
+        selected,
+        ChangeModes::ChangedBtwCursorAndMarker(marker_index),
+        "Cursor and marker",
+    );
+
+    if matches!(selected, ChangeModes::ChangedBtwCursorAndMarker(_)) {
+        marker_combo(ui, marker_id, selected);
+    }
+}
+fn change_mode_dropdown(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    label: &'static str,
+    marker_id: &'static str,
+    selected: &mut ChangeModes,
+) {
+    ui.vertical(|ui| {
+        CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id(id), false)
+            .show_header(ui, |ui| {
+                ui.add_sized([120.0, 20.0], egui::Label::new(label));
+            })
+            .body(|ui| {
+                change_mode_menu(ui, marker_id, selected);
+            });
+    });
+}
+fn highlight_dropdown(ui: &mut egui::Ui, selected: &mut ChangeModes, highlight_value: &mut String) {
+    ui.vertical(|ui| {
+        CollapsingState::load_with_default_open(
+            ui.ctx(),
+            ui.make_persistent_id("memory_viewer_highlight"),
+            false,
+        )
+        .show_header(ui, |ui| {
+            ui.add_sized([120.0, 20.0], egui::Label::new("Highlight"));
+        })
+        .body(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(220.0, 0.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    change_mode_menu(ui, "memory_viewer_highlight_marker", selected);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Value:");
+
+                        ui.add_sized(
+                            [120.0, 20.0],
+                            egui::TextEdit::singleline(highlight_value).hint_text("Highlight"),
+                        );
+                    });
+                },
+            );
+        });
+    });
 }
 impl SystemState {
     pub fn draw_memory_viewer_window(&mut self, ctx: &egui::Context, _msgs: &mut Vec<Message>) {
@@ -177,7 +275,8 @@ impl SystemState {
                     scope: scope.clone(),
                     cursor: cursor.clone(),
                     value_format: translator_name.clone(),
-                    change_display_modes: self.memory_viewer.change_display_modes,
+                    filter_mode: self.memory_viewer.filter_mode,
+                    highlight_mode: self.memory_viewer.highlight_mode,
                 };
                 let cache_hit = self
                     .memory_viewer_cache
@@ -191,21 +290,11 @@ impl SystemState {
 
                 let mut variables = wave_container.variables_in_scope(&scope);
                 variables.sort_by_key(|v| v.index.unwrap_or(i64::MAX));
+                let filter_change_range =
+                    change_range(self.memory_viewer.filter_mode, &cursor, &waves.markers);
 
-                let change_range = match self.memory_viewer.change_display_modes {
-                    ChangeModes::ChangedBtwCursorAndMarker(marker_index) => {
-                        waves.markers.get(&marker_index).and_then(|marker| {
-                            marker.to_biguint().map(|marker_time| {
-                                if cursor <= marker_time {
-                                    (cursor.clone(), marker_time)
-                                } else {
-                                    (marker_time, cursor.clone())
-                                }
-                            })
-                        })
-                    }
-                    _ => None,
-                };
+                let highlight_change_range =
+                    change_range(self.memory_viewer.highlight_mode, &cursor, &waves.markers);
                 if rows.is_empty() {
                     for var_ref in &variables {
                         let Some(index) = var_ref
@@ -224,21 +313,31 @@ impl SystemState {
                             continue;
                         };
 
-                        let changed = change_time == cursor;
-                        let change_b_selected_times = change_range
-                            .as_ref()
-                            .and_then(|(start_time, end_time)| {
-                                wave_container
-                                    .query_variable(var_ref, start_time)
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|query_result| query_result.next)
-                                    .map(|next_change| {
-                                        next_change > *start_time && next_change < *end_time
+                        let changed_at_cursor = change_time == cursor;
+                        let changed_in_range =
+                            |range: Option<&(num::BigUint, num::BigUint)>| -> bool {
+                                range
+                                    .and_then(|(start_time, end_time)| {
+                                        wave_container
+                                            .query_variable(var_ref, start_time)
+                                            .ok()
+                                            .flatten()
+                                            .and_then(|query_result| query_result.next)
+                                            .map(|next_change| {
+                                                next_change > *start_time && next_change < *end_time
+                                            })
                                     })
-                            })
-                            .unwrap_or(false);
+                                    .unwrap_or(false)
+                            };
 
+                        let changed_for_filter = changed_in_range(filter_change_range.as_ref());
+
+                        let changed_for_highlight = if filter_change_range == highlight_change_range
+                        {
+                            changed_for_filter
+                        } else {
+                            changed_in_range(highlight_change_range.as_ref())
+                        };
                         let display_value = wave_container
                             .variable_meta(var_ref)
                             .ok()
@@ -265,60 +364,71 @@ impl SystemState {
                             .unwrap_or_else(|| (raw_value.to_string(), ValueKind::Normal));
 
                         let (value, kind) = display_value;
+
                         rows.push(MemoryRow {
                             index,
                             value,
                             kind,
-                            changed_values: changed,
-                            change_b_selected_times,
+                            changed_at_cursor,
+                            changed_for_filter,
+                            changed_for_highlight,
                         });
                     }
+
                     self.memory_viewer_cache = Some(MemoryViewerCache {
                         key: cache_key,
                         rows: Rc::new(rows.clone()),
                     });
                 }
-
                 ui.label(format!("Structured entries: {}", rows.len()));
 
                 ui.separator();
 
-                egui::CollapsingHeader::new("View Options")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.checkbox(&mut self.memory_viewer.color_values, "Color values");
-
-                        ui.radio_value(
-                            &mut self.memory_viewer.change_display_modes,
-                            ChangeModes::AllValues,
-                            "Show all values",
+                ui.horizontal_top(|ui| {
+                    if self.memory_viewer.value_column_count == 1 {
+                        change_mode_dropdown(
+                            ui,
+                            "memory_viewer_filter",
+                            "Filter",
+                            "memory_viewer_filter_marker",
+                            &mut self.memory_viewer.filter_mode,
                         );
-                        ui.radio_value(
-                            &mut self.memory_viewer.change_display_modes,
-                            ChangeModes::ChangedAtCursor,
-                            "Show changed values at current cursor",
-                        );
-                        ui.horizontal(|ui| {
-                            let marker_index = match self.memory_viewer.change_display_modes {
-                                ChangeModes::ChangedBtwCursorAndMarker(index) => index,
-                                _ => 1,
-                            };
+                    }
+                    highlight_dropdown(
+                        ui,
+                        &mut self.memory_viewer.highlight_mode,
+                        &mut self.memory_viewer.highlight_value,
+                    );
 
-                            ui.radio_value(
-                                &mut self.memory_viewer.change_display_modes,
-                                ChangeModes::ChangedBtwCursorAndMarker(marker_index),
-                                "Show changed rows between cursor and",
-                            );
-                            marker_combo(
-                                ui,
-                                "memory_viewer_marker",
-                                &mut self.memory_viewer.change_display_modes,
-                            );
-                        });
-                    });
+                    ui.checkbox(&mut self.memory_viewer.color_values, "Color values");
+                });
+                let mut find_previous_requested = false;
+                let mut find_next_requested = false;
+                ui.horizontal(|ui| {
+                    ui.label("Find:");
 
+                    ui.add_sized(
+                        [160.0, 20.0],
+                        egui::TextEdit::singleline(&mut self.memory_viewer.search_value),
+                    );
+
+                    if ui
+                        .add(egui::Button::new(icons::ARROW_UP_LINE).frame(false))
+                        .on_hover_text("Previous match")
+                        .clicked()
+                    {
+                        find_previous_requested = true;
+                    }
+
+                    if ui
+                        .add(egui::Button::new(icons::ARROW_DOWN_LINE).frame(false))
+                        .on_hover_text("Next match")
+                        .clicked()
+                    {
+                        find_next_requested = true;
+                    }
+                });
                 ui.separator();
-
                 ui.horizontal(|ui| {
                     ui.label("Index format:");
                     egui::ComboBox::from_id_salt("memory_viewer_index_format")
@@ -409,113 +519,273 @@ impl SystemState {
                         jump_requested = true;
                     }
 
-                    ui.label("Filter:");
-                    ui.add_sized(
-                        [90.0, 20.0],
-                        egui::TextEdit::singleline(&mut self.memory_viewer.search_value),
+                    ui.label("Columns:");
+
+                    ui.add(
+                        DragValue::new(&mut self.memory_viewer.value_column_count).range(1..=32),
                     );
 
+                    if self.memory_viewer.value_column_count > 1 {
+                        self.memory_viewer.filter_mode = ChangeModes::AllValues;
+                    }
+
+                    ui.separator();
                     ui.separator();
                 });
 
                 ui.separator();
 
-                let search_value = self.memory_viewer.search_value.trim().to_lowercase();
-
                 let visible_rows: Vec<_> = rows
                     .iter()
-                    .filter(|row| {
-                        match self.memory_viewer.change_display_modes {
-                            ChangeModes::AllValues => {}
-                            ChangeModes::ChangedAtCursor => {
-                                if !row.changed_values {
-                                    return false;
-                                }
-                            }
-                            ChangeModes::ChangedBtwCursorAndMarker(_marker) => {
-                                if !row.change_b_selected_times {
-                                    return false;
-                                }
-                            }
-                        }
+                    .filter(|row| match self.memory_viewer.filter_mode {
+                        ChangeModes::AllValues => true,
 
-                        if search_value.is_empty() {
-                            return true;
-                        }
+                        ChangeModes::ChangedAtCursor => row.changed_at_cursor,
 
-                        let value = row.value.to_lowercase();
-                        value == search_value || value.contains(&search_value)
+                        ChangeModes::ChangedBtwCursorAndMarker(_) => row.changed_for_filter,
                     })
                     .collect();
-
-                if jump_requested
-                    && let Some(target_index) =
-                        parse_jump_to_index(&self.memory_viewer.jump_to_index)
-                {
-                    self.memory_viewer.scroll_to_row =
-                        closest_row_index(&visible_rows, target_index);
-                }
-
+                let matching_positions: Vec<usize> = visible_rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, row)| {
+                        value_matches(&row.value, &self.memory_viewer.search_value)
+                            .then_some(position)
+                    })
+                    .collect();
                 let max_index = rows.iter().map(|row| row.index).max().unwrap_or(0);
-
                 let text_height = egui::TextStyle::Body
                     .resolve(ui.style())
                     .size
                     .max(ui.spacing().interact_size.y);
 
-                let available_height = ui.available_height().max(250.0);
+                // let available_height = ui.available_height().max(250.0);
+                let value_column_count = self
+                    .memory_viewer
+                    .value_column_count
+                    .clamp(1, visible_rows.len().max(1));
+                self.memory_viewer.value_column_count = value_column_count;
+                let table_rows = visible_rows.len().div_ceil(value_column_count);
 
-                let mut table = TableBuilder::new(ui)
-                    .striped(true)
-                    .resizable(true)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::auto())
-                    .column(Column::remainder())
-                    .min_scrolled_height(150.0)
-                    .max_scroll_height(available_height);
+                let mut navigation_target = None;
+                // jump to the closest memory index
+                if jump_requested
+                    && let Some(target_index) =
+                        parse_jump_to_index(&self.memory_viewer.jump_to_index)
+                    && let Some(value_position) = closest_row_index(&visible_rows, target_index)
+                {
+                    navigation_target = Some(value_position);
+                }
+                // Move to the next matching value, wrapping to the first match.
+                if find_next_requested {
+                    navigation_target = self
+                        .memory_viewer
+                        .selected_value_position
+                        .and_then(|selected_position| {
+                            matching_positions
+                                .iter()
+                                .copied()
+                                .find(|position| *position > selected_position)
+                        })
+                        .or_else(|| matching_positions.first().copied());
+                }
+                // Move to the previous matching value, wrapping to the last match.
+                if find_previous_requested {
+                    navigation_target = self
+                        .memory_viewer
+                        .selected_value_position
+                        .and_then(|selected_position| {
+                            matching_positions
+                                .iter()
+                                .rev()
+                                .copied()
+                                .find(|position| *position < selected_position)
+                        })
+                        .or_else(|| matching_positions.last().copied());
+                }
+                if let Some(value_position) = navigation_target {
+                    self.memory_viewer.selected_value_position = Some(value_position);
 
-                if let Some(row_index) = self.memory_viewer.scroll_to_row.take() {
-                    table = table.scroll_to_row(row_index, Some(egui::Align::Min));
+                    self.memory_viewer.scroll_to_row = Some(value_position / value_column_count);
                 }
 
-                table
-                    .header(24.0, |mut header| {
-                        header.col(|ui| {
-                            ui.monospace("Index");
-                        });
-                        header.col(|ui| {
-                            ui.monospace("Value");
-                        });
-                    })
-                    .body(|body| {
-                        body.rows(text_height, visible_rows.len(), |mut row| {
-                            let row_index = row.index();
-                            let row_data = visible_rows[row_index];
+                let table_width = ui.available_width();
+                let table_height = ui.available_height();
 
-                            row.col(|ui| {
-                                ui.monospace(format_index(
-                                    row_data.index,
-                                    self.memory_viewer.index_format,
-                                    max_index,
-                                ));
-                            });
+                let horizontal_navigation_target = navigation_target;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(table_width, table_height),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        egui::ScrollArea::horizontal()
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                let mut table = TableBuilder::new(ui)
+                                    .striped(true)
+                                    .resizable(true)
+                                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                    .column(Column::auto());
 
-                            row.col(|ui| {
-                                if self.memory_viewer.color_values {
-                                    let color = row_data.kind.color(
-                                        self.user.config.theme.variable_default,
-                                        &self.user.config.theme,
-                                    );
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(color, "■");
-                                        ui.monospace(&row_data.value);
-                                    });
-                                } else {
-                                    ui.monospace(&row_data.value);
+                                for _ in 0..value_column_count {
+                                    table = table.column(Column::auto());
                                 }
+
+                                if let Some(row_index) = self.memory_viewer.scroll_to_row.take() {
+                                    table =
+                                        table.scroll_to_row(row_index, Some(egui::Align::Center));
+                                }
+                                table
+                                    .header(24.0, |mut header| {
+                                        header.col(|ui| {
+                                            ui.monospace("Index");
+                                        });
+
+                                        for column_index in 0..value_column_count {
+                                            header.col(|ui| {
+                                                if column_index == 0 {
+                                                    ui.monospace("Value");
+                                                } else {
+                                                    ui.monospace(format!("+{column_index}"));
+                                                }
+                                            });
+                                        }
+                                    })
+                                    .body(|body| {
+                                        body.rows(text_height, table_rows, |mut row| {
+                                            let table_row_index = row.index();
+                                            let row_start = table_row_index * value_column_count;
+
+                                            let Some(first_row_data) = visible_rows.get(row_start)
+                                            else {
+                                                return;
+                                            };
+
+                                            row.col(|ui| {
+                                                ui.monospace(format_index(
+                                                    first_row_data.index,
+                                                    self.memory_viewer.index_format,
+                                                    max_index,
+                                                ));
+                                            });
+
+                                            for column_index in 0..value_column_count {
+                                                row.col(|ui| {
+                                                    let value_index = row_start + column_index;
+
+                                                    let Some(row_data) =
+                                                        visible_rows.get(value_index)
+                                                    else {
+                                                        return;
+                                                    };
+
+                                                    let is_selected =
+                                                        self.memory_viewer.selected_value_position
+                                                            == Some(value_index);
+                                                    let highlighted_by_change = match self
+                                                        .memory_viewer
+                                                        .highlight_mode
+                                                    {
+                                                        ChangeModes::AllValues => false,
+
+                                                        ChangeModes::ChangedAtCursor => {
+                                                            row_data.changed_at_cursor
+                                                        }
+
+                                                        ChangeModes::ChangedBtwCursorAndMarker(
+                                                            _,
+                                                        ) => row_data.changed_for_highlight,
+                                                    };
+
+                                                    let highlighted_by_value = value_matches(
+                                                        &row_data.value,
+                                                        &self.memory_viewer.highlight_value,
+                                                    );
+
+                                                    let is_highlighted = highlighted_by_change
+                                                        || highlighted_by_value;
+                                                    let frame = if is_selected {
+                                                        egui::Frame::NONE
+                                                            .fill(
+                                                                self.user
+                                                                    .config
+                                                                    .theme
+                                                                    .accent_info
+                                                                    .background,
+                                                            )
+                                                            .inner_margin(egui::Margin::symmetric(
+                                                                4, 1,
+                                                            ))
+                                                    } else if is_highlighted {
+                                                        egui::Frame::NONE
+                                                            .fill(
+                                                                self.user
+                                                                    .config
+                                                                    .theme
+                                                                    .selected_elements_colors
+                                                                    .background,
+                                                            )
+                                                            .inner_margin(egui::Margin::symmetric(
+                                                                4, 1,
+                                                            ))
+                                                    } else {
+                                                        egui::Frame::NONE.inner_margin(
+                                                            egui::Margin::symmetric(4, 1),
+                                                        )
+                                                    };
+
+                                                    let frame_response = frame.show(ui, |ui| {
+                                                        if is_selected {
+                                                            ui.visuals_mut().override_text_color =
+                                                                Some(
+                                                                    self.user
+                                                                        .config
+                                                                        .theme
+                                                                        .accent_info
+                                                                        .foreground,
+                                                                );
+                                                        } else if is_highlighted {
+                                                            ui.visuals_mut().override_text_color =
+                                                                Some(
+                                                                    self.user
+                                                                        .config
+                                                                        .theme
+                                                                        .selected_elements_colors
+                                                                        .foreground,
+                                                                );
+                                                        }
+
+                                                        if self.memory_viewer.color_values {
+                                                            let color = row_data.kind.color(
+                                                                self.user
+                                                                    .config
+                                                                    .theme
+                                                                    .variable_default,
+                                                                &self.user.config.theme,
+                                                            );
+
+                                                            ui.horizontal(|ui| {
+                                                                ui.colored_label(color, "■");
+                                                                ui.monospace(&row_data.value);
+                                                            });
+                                                        } else {
+                                                            ui.monospace(&row_data.value);
+                                                        }
+                                                    });
+                                                    if horizontal_navigation_target
+                                                        == Some(value_index)
+                                                    {
+                                                        ui.scroll_to_rect(
+                                                            frame_response.response.rect,
+                                                            Some(egui::Align::Center),
+                                                        );
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    });
                             });
-                        });
-                    });
+                    },
+                );
             });
 
         self.memory_viewer.open = open;

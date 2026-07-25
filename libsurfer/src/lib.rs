@@ -924,7 +924,23 @@ impl SystemState {
                             }
                         }
                         VariableValue::String(s) => {
-                            if s.trim().to_lowercase() == target {
+                            let s_lower = s.trim().to_lowercase();
+                            // Exact match on the full raw value (e.g. "xxxx"
+                            // for a 4-bit all-x signal).
+                            if s_lower == target {
+                                return true;
+                            }
+                            // Single-character special-value codes
+                            // (x, z, h, l, u, w, -): match if the raw
+                            // per-bit value contains that character, so the
+                            // user can type `x` to find a multi-bit `x1x0`.
+                            if target.len() == 1
+                                && matches!(
+                                    target.chars().next(),
+                                    Some('x' | 'z' | 'h' | 'l' | 'u' | 'w' | '-')
+                                )
+                                && s_lower.contains(&target)
+                            {
                                 return true;
                             }
                         }

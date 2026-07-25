@@ -179,7 +179,7 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 * ``goto_value <VALUE>``
 
-  Move the cursor to the next time the focused variable takes the given value, searching forward from the current cursor position. ``VALUE`` is matched against the displayed (translated) value first, then against the raw value — decimal, hex (``0x``), binary (``0b``), or octal (``0o``) for numeric values. The view scrolls to follow the cursor if it is off-screen.
+  Move the cursor to the next time the focused variable takes the given value, searching forward from the current cursor position. ``VALUE`` is matched against the displayed (translated) value first (e.g. ``undef``, ``highimp``, ``weak``, ``don't care``), then against the raw value — decimal, hex (``0x``), binary (``0b``), or octal (``0o``) for numeric values, or the exact raw string for string values. Single-character special-value codes (``x``, ``z``, ``h``, ``l``, ``u``, ``w``, ``-``) match any value that contains that bit. The view scrolls to follow the cursor if it is off-screen.
 
 * ``zoom_to <START_TIME> <END_TIME>``
 

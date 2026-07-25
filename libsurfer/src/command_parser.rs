@@ -1150,6 +1150,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|value_str| {
                         Some(Command::Terminal(Message::GoToValue {
                             value: value_str.to_string(),
+                            next: true,
                         }))
                     }),
                 ),

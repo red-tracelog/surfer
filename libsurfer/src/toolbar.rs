@@ -5,11 +5,11 @@ use emath::{Align, Vec2};
 
 use std::collections::HashSet;
 
+use crate::displayed_item::DisplayedItem;
 use crate::message::MessageTarget;
 use crate::mousegestures::AnnotationKind;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
-use crate::displayed_item::DisplayedItem;
 use crate::{
     SystemState,
     file_dialog::OpenMode,
@@ -752,35 +752,67 @@ impl SystemState {
             }
 
             if response.gained_focus() {
-                msgs.push(Message::SetTextEditFocused(TOOLBAR_VALUE_ID.to_string(), true));
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    true,
+                ));
             }
 
             let trimmed = input.trim();
             let button_enabled = !trimmed.is_empty();
-            let goto_button =
-                Button::new(RichText::new(icons::SEARCH_LINE).heading()).frame(false);
 
-            let trigger = if response.lost_focus()
-                && response.ctx.input(|i| i.key_pressed(egui::Key::Enter))
+            // "Search previous" button
+            let prev_button =
+                Button::new(RichText::new(icons::CONTRACT_LEFT_FILL).heading()).frame(false);
+            if ui
+                .add_enabled(button_enabled, prev_button)
+                .on_hover_text("Go to previous value")
+                .clicked()
             {
-                true
-            } else {
-                ui.add_enabled(button_enabled, goto_button)
-                    .on_hover_text("Go to value")
-                    .clicked()
-            };
-
-            if trigger
-                && response.lost_focus()
-                && response.ctx.input(|i| i.key_pressed(egui::Key::Enter))
-            {
-                msgs.push(Message::SetTextEditFocused(TOOLBAR_VALUE_ID.to_string(), false));
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: false,
+                    });
+                }
             }
 
-            if trigger && button_enabled {
-                msgs.push(Message::GoToValue {
-                    value: trimmed.to_string(),
-                });
+            // "Search next" button
+            let next_button =
+                Button::new(RichText::new(icons::CONTRACT_RIGHT_FILL).heading()).frame(false);
+            if ui
+                .add_enabled(button_enabled, next_button)
+                .on_hover_text("Go to next value")
+                .clicked()
+            {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: true,
+                    });
+                }
+            }
+
+            // Enter key triggers "search next"
+            if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: true,
+                    });
+                }
             }
         });
     }

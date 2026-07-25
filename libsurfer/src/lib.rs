@@ -115,6 +115,7 @@ use message::MessageTarget;
 use num::BigInt;
 use num::BigUint;
 use num::bigint::ToBigInt as _;
+use num::{One, Zero};
 use serde::Deserialize;
 use surfer_translation_types::Translator;
 use surfer_translation_types::VariableValue;
@@ -843,7 +844,7 @@ impl SystemState {
                     );
                 }
             }
-            Message::GoToValue { value } => {
+            Message::GoToValue { value, next } => {
                 let waves = self.user.waves.as_mut()?;
                 if waves.max_timestamp().is_none() {
                     warn!(
@@ -930,37 +931,78 @@ impl SystemState {
                 };
 
                 // Walk forward through transitions and collect the matching time.
-                let mut search_time = start_time.clone();
-                let mut found_time: Option<BigUint> = None;
-                for _ in 0..u32::MAX {
-                    let Ok(Some(res)) =
-                        wave_container.query_variable(&variable_ref, &search_time)
-                    else {
-                        break;
-                    };
-                    let Some(next_time) = res.next else {
-                        break;
-                    };
-                    let Ok(Some(next_res)) =
-                        wave_container.query_variable(&variable_ref, &next_time)
-                    else {
-                        break;
-                    };
-                    if let Some((_, val)) = &next_res.current
-                        && matches_value(val)
-                    {
-                        found_time = Some(next_time);
-                        break;
+                let found_time: Option<BigUint> = if next {
+                    let mut search_time = start_time.clone();
+                    let mut found = None;
+                    for _ in 0..u32::MAX {
+                        let Ok(Some(res)) =
+                            wave_container.query_variable(&variable_ref, &search_time)
+                        else {
+                            break;
+                        };
+                        let Some(next_time) = res.next else {
+                            break;
+                        };
+                        let Ok(Some(next_res)) =
+                            wave_container.query_variable(&variable_ref, &next_time)
+                        else {
+                            break;
+                        };
+                        if let Some((_, val)) = &next_res.current
+                            && matches_value(val)
+                        {
+                            found = Some(next_time);
+                            break;
+                        }
+                        search_time = next_time;
                     }
-                    search_time = next_time;
-                }
+                    found
+                } else {
+                    // Walk backward through transitions.  We query at the
+                    // current position to get the current transition's time,
+                    // then step back by one tick to land in the previous
+                    // value's interval, and repeat.
+                    let mut search_time = start_time.clone();
+                    let mut found = None;
+                    for _ in 0..u32::MAX {
+                        let Ok(Some(res)) =
+                            wave_container.query_variable(&variable_ref, &search_time)
+                        else {
+                            break;
+                        };
+                        let Some((curr_time, _)) = res.current else {
+                            break;
+                        };
+                        if curr_time.is_zero() {
+                            break;
+                        }
+                        let prev_search = &curr_time - BigUint::one();
+                        let Ok(Some(prev_res)) =
+                            wave_container.query_variable(&variable_ref, &prev_search)
+                        else {
+                            break;
+                        };
+                        let Some((prev_time, prev_val)) = prev_res.current else {
+                            break;
+                        };
+                        if matches_value(&prev_val) {
+                            found = Some(prev_time);
+                            break;
+                        }
+                        search_time = prev_time;
+                    }
+                    found
+                };
 
                 if let Some(time) = found_time {
                     waves.cursor = time.to_bigint();
                     waves.go_to_cursor_if_not_in_view();
                     self.invalidate_draw_commands();
                 } else {
-                    warn!("Go to value: value '{value}' not found for focused variable");
+                    let direction = if next { "next" } else { "previous" };
+                    warn!(
+                        "Go to value: value '{value}' not found in {direction} direction for focused variable"
+                    );
                 }
             }
             Message::SetTimeUnit(timeunit) => {

@@ -126,7 +126,6 @@ use tokio_stream as _;
 use tracing::{error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
-use crate::translation::TranslationResultExt;
 use wave_container::ScopeRef;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
@@ -845,6 +844,10 @@ impl SystemState {
                 }
             }
             Message::GoToValue { value, next } => {
+                // Compute time formatting info before mutably borrowing waves.
+                let wanted_timeunit = self.user.wanted_timeunit;
+                let time_format = self.get_time_format();
+
                 let waves = self.user.waves.as_mut()?;
                 if waves.max_timestamp().is_none() {
                     warn!(
@@ -856,8 +859,7 @@ impl SystemState {
                 let focused = waves.focused_item?;
                 let node = waves.items_tree.get_visible(focused)?;
                 let item_ref = node.item_ref;
-                let DisplayedItem::Variable(displayed_variable) =
-                    &waves.displayed_items[&item_ref]
+                let DisplayedItem::Variable(displayed_variable) = &waves.displayed_items[&item_ref]
                 else {
                     warn!("Go to value: focused item is not a variable");
                     return None;
@@ -995,7 +997,16 @@ impl SystemState {
                 };
 
                 if let Some(time) = found_time {
-                    waves.cursor = time.to_bigint();
+                    let timescale = waves.inner.metadata().timescale.clone();
+                    let time_bigint = time.to_bigint().unwrap_or_default();
+                    let time_str = crate::time::time_string(
+                        &time_bigint,
+                        &timescale,
+                        &wanted_timeunit,
+                        &time_format,
+                    );
+                    info!("Go to value: found '{value}' at {time_str}");
+                    waves.cursor = Some(time_bigint);
                     waves.go_to_cursor_if_not_in_view();
                     self.invalidate_draw_commands();
                 } else {

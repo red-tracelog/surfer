@@ -351,6 +351,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "timeline_add",
             "cursor_set",
             "goto_time",
+            "goto_value",
             "marker_set",
             "marker_set_at",
             "marker_remove",
@@ -1144,6 +1145,14 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         }),
                     )
                 }
+                "goto_value" => single_word(
+                    vec![],
+                    Box::new(|value_str| {
+                        Some(Command::Terminal(Message::GoToValue {
+                            value: value_str.to_string(),
+                        }))
+                    }),
+                ),
                 "marker_set" => Some(Command::NonTerminal(
                     ParamGreed::Custom(&separate_at_space),
                     // FIXME use once fzcmd does not enforce suggestion match, as of now we couldn't add a marker (except the first)

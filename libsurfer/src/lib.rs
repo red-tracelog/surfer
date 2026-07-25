@@ -113,8 +113,11 @@ use futures::executor::block_on;
 use itertools::Itertools;
 use message::MessageTarget;
 use num::BigInt;
+use num::BigUint;
+use num::bigint::ToBigInt as _;
 use serde::Deserialize;
 use surfer_translation_types::Translator;
+use surfer_translation_types::VariableValue;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
 #[cfg(target_arch = "wasm32")]
@@ -122,6 +125,7 @@ use tokio_stream as _;
 use tracing::{error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
+use crate::translation::TranslationResultExt;
 use wave_container::ScopeRef;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
@@ -837,6 +841,126 @@ impl SystemState {
                     warn!(
                         "Go to time: No timestamps count, even though waveforms should be loaded"
                     );
+                }
+            }
+            Message::GoToValue { value } => {
+                let waves = self.user.waves.as_mut()?;
+                if waves.max_timestamp().is_none() {
+                    warn!(
+                        "Go to value: No timestamps count, even though waveforms should be loaded"
+                    );
+                    return None;
+                }
+
+                let focused = waves.focused_item?;
+                let node = waves.items_tree.get_visible(focused)?;
+                let item_ref = node.item_ref;
+                let DisplayedItem::Variable(displayed_variable) =
+                    &waves.displayed_items[&item_ref]
+                else {
+                    warn!("Go to value: focused item is not a variable");
+                    return None;
+                };
+                let variable_ref = displayed_variable.variable_ref.clone();
+
+                let wave_container = waves.inner.as_waves().unwrap();
+                let meta = match wave_container.variable_meta(&variable_ref) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!("Go to value: failed to get variable meta: {e}");
+                        return None;
+                    }
+                };
+                let displayed_field_ref: DisplayedFieldRef = item_ref.into();
+                let translators_ref = &self.translators;
+                let translator = waves.variable_translator_with_meta(
+                    &displayed_field_ref.without_field(),
+                    translators_ref,
+                    &meta,
+                );
+
+                // Start searching from the current cursor, or from time 0 if no
+                // cursor is set.  We look for the *next* transition whose value
+                // matches, so the current position is the starting point, not a
+                // candidate.
+                let start_time: BigUint = waves
+                    .cursor
+                    .as_ref()
+                    .and_then(|c| c.to_biguint())
+                    .unwrap_or_default();
+
+                let target = value.trim().to_lowercase();
+                let field_path = &displayed_field_ref.field;
+
+                // Helper: does `val` match the user-provided target string?
+                let matches_value = |val: &VariableValue| -> bool {
+                    // 1. Compare against the translated display string (what the
+                    //    user sees in the value column).
+                    if let Ok(translated) = translator.translate(&meta, val) {
+                        let fields = translated.format_flat(
+                            &displayed_variable.format,
+                            &displayed_variable.field_formats,
+                            translators_ref,
+                        );
+                        let subfield = fields.iter().find(|res| res.names == *field_path);
+                        if let Some(res) = subfield
+                            && let Some(tv) = &res.value
+                        {
+                            if tv.value.trim().to_lowercase() == target {
+                                return true;
+                            }
+                        }
+                    }
+                    // 2. Fallback: compare against the raw value.  For BigUint,
+                    //    accept decimal, hex (0x), binary (0b) and octal (0o)
+                    //    representations.  For String values, compare directly.
+                    match val {
+                        VariableValue::BigUint(v) => {
+                            if let Some(parsed) = parse_biguint(&target) {
+                                return parsed == *v;
+                            }
+                        }
+                        VariableValue::String(s) => {
+                            if s.trim().to_lowercase() == target {
+                                return true;
+                            }
+                        }
+                    }
+                    false
+                };
+
+                // Walk forward through transitions and collect the matching time.
+                let mut search_time = start_time.clone();
+                let mut found_time: Option<BigUint> = None;
+                for _ in 0..u32::MAX {
+                    let Ok(Some(res)) =
+                        wave_container.query_variable(&variable_ref, &search_time)
+                    else {
+                        break;
+                    };
+                    let Some(next_time) = res.next else {
+                        break;
+                    };
+                    let Ok(Some(next_res)) =
+                        wave_container.query_variable(&variable_ref, &next_time)
+                    else {
+                        break;
+                    };
+                    if let Some((_, val)) = &next_res.current
+                        && matches_value(val)
+                    {
+                        found_time = Some(next_time);
+                        break;
+                    }
+                    search_time = next_time;
+                }
+
+                if let Some(time) = found_time {
+                    waves.cursor = time.to_bigint();
+                    waves.go_to_cursor_if_not_in_view();
+                    self.invalidate_draw_commands();
+                } else {
+                    warn!("Go to value: value '{value}' not found for focused variable");
                 }
             }
             Message::SetTimeUnit(timeunit) => {
@@ -2803,5 +2927,26 @@ pub struct StateWrapper(Arc<RwLock<SystemState>>);
 impl App for StateWrapper {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         App::ui(&mut *self.0.write().unwrap(), ui, frame);
+    }
+}
+
+/// Parse a string into a [`BigUint`], supporting decimal, hex (`0x`), binary
+/// (`0b`) and octal (`0o`) prefixes.  Used by the "go to value" search to match
+/// raw numeric values.
+fn parse_biguint(s: &str) -> Option<BigUint> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Strip a leading + sign.
+    let s = s.strip_prefix('+').unwrap_or(s);
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        BigUint::parse_bytes(hex.as_bytes(), 16)
+    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        BigUint::parse_bytes(bin.as_bytes(), 2)
+    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        BigUint::parse_bytes(oct.as_bytes(), 8)
+    } else {
+        BigUint::parse_bytes(s.as_bytes(), 10)
     }
 }

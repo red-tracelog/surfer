@@ -952,27 +952,46 @@ impl SystemState {
                 let found_time: Option<BigUint> = if next {
                     let mut search_time = start_time.clone();
                     let mut found = None;
-                    for _ in 0..u32::MAX {
-                        let Ok(Some(res)) =
+
+                    // When no cursor is set, the current position (time 0) is
+                    // a valid candidate — check it before walking forward.
+                    // When a cursor is set, we want the *next* match after it,
+                    // so we skip the current value.
+                    if waves.cursor.is_none() {
+                        if let Ok(Some(res)) =
                             wave_container.query_variable(&variable_ref, &search_time)
-                        else {
-                            break;
-                        };
-                        let Some(next_time) = res.next else {
-                            break;
-                        };
-                        let Ok(Some(next_res)) =
-                            wave_container.query_variable(&variable_ref, &next_time)
-                        else {
-                            break;
-                        };
-                        if let Some((_, val)) = &next_res.current
-                            && matches_value(val)
                         {
-                            found = Some(next_time);
-                            break;
+                            if let Some((curr_time, curr_val)) = &res.current
+                                && matches_value(curr_val)
+                            {
+                                found = Some(curr_time.clone());
+                            }
                         }
-                        search_time = next_time;
+                    }
+
+                    if found.is_none() {
+                        for _ in 0..u32::MAX {
+                            let Ok(Some(res)) =
+                                wave_container.query_variable(&variable_ref, &search_time)
+                            else {
+                                break;
+                            };
+                            let Some(next_time) = res.next else {
+                                break;
+                            };
+                            let Ok(Some(next_res)) =
+                                wave_container.query_variable(&variable_ref, &next_time)
+                            else {
+                                break;
+                            };
+                            if let Some((_, val)) = &next_res.current
+                                && matches_value(val)
+                            {
+                                found = Some(next_time);
+                                break;
+                            }
+                            search_time = next_time;
+                        }
                     }
                     found
                 } else {

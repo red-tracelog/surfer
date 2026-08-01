@@ -3959,3 +3959,20 @@ snapshot_ui_with_file_and_msgs! {set_bit_indices_translator, "examples/bit_indic
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Binary")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Set bit indices")),
 ]}
+
+snapshot_ui_with_file_and_msgs! {goto_value_next, "examples/analog.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["top"]), false),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(4)),
+        Some(crate::displayed_item::AnalogSettings { render_style: crate::displayed_item::AnalogRenderStyle::Interpolated, y_axis_scale: crate::displayed_item::AnalogYAxisScale::Viewport }),
+    ),
+    Message::FocusItem(VisibleItemIndex(3)),
+    Message::GoToValue {
+        value: "f9".to_string(),
+        next: true,
+    },
+    Message::GoToValue {
+        value: "f9".to_string(),
+        next: true,
+    },
+]}

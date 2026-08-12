@@ -11,6 +11,7 @@ use tracing::{info, warn};
 use crate::SystemState;
 use crate::displayed_item::{DisplayedFieldRef, DisplayedItem};
 use crate::translation::TranslationResultExt;
+use crate::wave_container::VariableRefExt;
 
 impl SystemState {
     /// Handle `Message::GoToValue`.
@@ -137,19 +138,36 @@ impl SystemState {
             &matches_value,
         );
 
+        let signal_name = variable_ref.full_path_string();
+
+        let cursor_str = waves
+            .cursor
+            .as_ref()
+            .map(|c| {
+                crate::time::time_string(
+                    c,
+                    &waves.inner.metadata().timescale,
+                    &wanted_timeunit,
+                    &time_format,
+                )
+            })
+            .unwrap_or_else(|| "unset".to_string());
+
         if let Some(time) = found_time {
             let timescale = waves.inner.metadata().timescale.clone();
             let time_bigint = time.to_bigint().unwrap_or_default();
             let time_str =
                 crate::time::time_string(&time_bigint, &timescale, &wanted_timeunit, &time_format);
-            info!("Go to value: found '{value}' at {time_str}");
+            info!(
+                "Go to value: found '{value}' at {time_str} on '{signal_name}' (cursor was {cursor_str})"
+            );
             waves.cursor = Some(time_bigint);
             waves.go_to_cursor_if_not_in_view();
             self.invalidate_draw_commands();
         } else {
             let direction = if next { "next" } else { "previous" };
             warn!(
-                "Go to value: value '{value}' not found in {direction} direction for focused variable"
+                "Go to value: value '{value}' not found in {direction} direction for '{signal_name}' (cursor at {cursor_str})"
             );
         }
     }

@@ -115,7 +115,10 @@ impl SystemState {
                     // per-bit value contains that character, so the
                     // user can type `x` to find a multi-bit `x1x0`.
                     if target.len() == 1
-                        && matches!(target.chars().next(), Some('x' | 'z' | 'h' | 'l' | 'u' | 'w' | '-'))
+                        && matches!(
+                            target.chars().next(),
+                            Some('x' | 'z' | 'h' | 'l' | 'u' | 'w' | '-')
+                        )
                         && s_lower.contains(&target)
                     {
                         return true;
@@ -125,27 +128,20 @@ impl SystemState {
             false
         };
 
-        let found_time: Option<BigUint> = if next {
-            search_forward(
-                wave_container,
-                &variable_ref,
-                &start_time,
-                cursor_was_set,
-                &matches_value,
-            )
-        } else {
-            search_backward(wave_container, &variable_ref, &start_time, &matches_value)
-        };
+        let found_time: Option<BigUint> = search_transitions(
+            wave_container,
+            &variable_ref,
+            &start_time,
+            next,
+            cursor_was_set,
+            &matches_value,
+        );
 
         if let Some(time) = found_time {
             let timescale = waves.inner.metadata().timescale.clone();
             let time_bigint = time.to_bigint().unwrap_or_default();
-            let time_str = crate::time::time_string(
-                &time_bigint,
-                &timescale,
-                &wanted_timeunit,
-                &time_format,
-            );
+            let time_str =
+                crate::time::time_string(&time_bigint, &timescale, &wanted_timeunit, &time_format);
             info!("Go to value: found '{value}' at {time_str}");
             waves.cursor = Some(time_bigint);
             waves.go_to_cursor_if_not_in_view();
@@ -159,21 +155,30 @@ impl SystemState {
     }
 }
 
-/// Walk forward through transitions and return the first matching time.
-fn search_forward(
+/// Walk through transitions in the given direction and return the first
+/// matching time.
+///
+/// When searching forward (`next` is true) and no cursor was set, the value
+/// at the current position (time 0) is checked as a candidate before walking.
+/// When a cursor was set, the search starts from the *next* transition after
+/// it.  When searching backward, the search steps through transitions in
+/// reverse from the current position.
+fn search_transitions(
     wave_container: &crate::wave_container::WaveContainer,
     variable_ref: &crate::wave_container::VariableRef,
     start_time: &BigUint,
+    next: bool,
     cursor_was_set: bool,
     matches_value: &impl Fn(&VariableValue) -> bool,
 ) -> Option<BigUint> {
     let mut search_time = start_time.clone();
     let mut found = None;
 
-    // When no cursor is set, the current position (time 0) is a valid
-    // candidate — check it before walking forward.  When a cursor is set,
-    // we want the *next* match after it, so we skip the current value.
-    if !cursor_was_set {
+    // When searching forward with no cursor set, the current position
+    // (time 0) is a valid candidate — check it before walking.  When a
+    // cursor is set, we want the *next* match after it, so we skip the
+    // current value.  Backward search never checks the current position.
+    if next && !cursor_was_set {
         if let Ok(Some(res)) = wave_container.query_variable(variable_ref, &search_time) {
             if let Some((curr_time, curr_val)) = &res.current
                 && matches_value(curr_val)
@@ -188,57 +193,41 @@ fn search_forward(
             let Ok(Some(res)) = wave_container.query_variable(variable_ref, &search_time) else {
                 break;
             };
-            let Some(next_time) = res.next else {
+
+            let candidate_time = if next {
+                // Forward: jump to the next transition.
+                let Some(next_time) = res.next else {
+                    break;
+                };
+                next_time
+            } else {
+                // Backward: get the current value's start time, then step
+                // back one tick to enter the previous value's interval.
+                let Some((curr_time, _)) = &res.current else {
+                    break;
+                };
+                if curr_time.is_zero() {
+                    break;
+                }
+                curr_time - BigUint::one()
+            };
+
+            let Ok(Some(candidate_res)) =
+                wave_container.query_variable(variable_ref, &candidate_time)
+            else {
                 break;
             };
-            let Ok(Some(next_res)) = wave_container.query_variable(variable_ref, &next_time) else {
+            let Some((candidate_time, candidate_val)) = &candidate_res.current else {
                 break;
             };
-            if let Some((_, val)) = &next_res.current
-                && matches_value(val)
-            {
-                found = Some(next_time);
+            if matches_value(candidate_val) {
+                found = Some(candidate_time.clone());
                 break;
             }
-            search_time = next_time;
+            search_time = candidate_time.clone();
         }
     }
-    found
-}
 
-/// Walk backward through transitions and return the first matching time.
-fn search_backward(
-    wave_container: &crate::wave_container::WaveContainer,
-    variable_ref: &crate::wave_container::VariableRef,
-    start_time: &BigUint,
-    matches_value: &impl Fn(&VariableValue) -> bool,
-) -> Option<BigUint> {
-    let mut search_time = start_time.clone();
-    let mut found = None;
-    for _ in 0..u32::MAX {
-        // Get the current value's start time.
-        let Ok(Some(res)) = wave_container.query_variable(variable_ref, &search_time) else {
-            break;
-        };
-        let Some((curr_time, _)) = res.current else {
-            break;
-        };
-        if curr_time.is_zero() {
-            break;
-        }
-        let prev_search = &curr_time - BigUint::one();
-        let Ok(Some(prev_res)) = wave_container.query_variable(variable_ref, &prev_search) else {
-            break;
-        };
-        let Some((prev_time, prev_val)) = prev_res.current else {
-            break;
-        };
-        if matches_value(&prev_val) {
-            found = Some(prev_time);
-            break;
-        }
-        search_time = prev_time;
-    }
     found
 }
 

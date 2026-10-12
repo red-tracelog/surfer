@@ -112,6 +112,7 @@ test-linux-arm64:
         - cargo test --features python --color=always --locked -- --include-ignored
 
 test-windows:
+    timeout: 2h 24m
     tags:
         - saas-windows-medium-amd64
     stage: test
@@ -191,6 +192,7 @@ test-nightly:
     allow_failure: true
 
 test-macos-aarch64:
+    timeout: 22m
     stage: test
     extends: .snapshots
     variables:
@@ -386,6 +388,7 @@ windows_build:
     interruptible: true
 
 macos-aarch64_build:
+    timeout: 19m
     stage: deploy
     needs: [test-macos-aarch64]
     variables:

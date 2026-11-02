@@ -59,6 +59,10 @@ static COMMAND_FILE_FILTER: FileFilter = FileFilter {
     extensions: &["sucl"],
 };
 
+#[cfg(any(
+    not(target_os = "macos"),
+    all(target_arch = "wasm32", not(feature = "vscode"))
+))]
 pub(crate) static STATE_FILE_FILTER: FileFilter = FileFilter {
     name: "Surfer state files (*.surf.ron)",
     extensions: &["surf.ron"],

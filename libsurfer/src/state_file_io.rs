@@ -6,6 +6,12 @@ use tracing::error;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::async_util::perform_async_work;
 use crate::channels::{checked_send, checked_send_many};
+use crate::file_dialog::FileFilter;
+#[cfg(any(
+    not(target_os = "macos"),
+    all(target_arch = "wasm32", not(feature = "vscode"))
+))]
+use crate::file_dialog::STATE_FILE_FILTER;
 #[cfg(any(
     target_os = "macos",
     all(target_arch = "wasm32", not(feature = "vscode"))
@@ -13,7 +19,6 @@ use crate::channels::{checked_send, checked_send_many};
 use crate::file_dialog::STATE_FILE_FILTER_MACOS;
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use crate::file_dialog::vscode_open_dialog_with_filter;
-use crate::file_dialog::{FileFilter, STATE_FILE_FILTER};
 
 use crate::{
     SystemState,

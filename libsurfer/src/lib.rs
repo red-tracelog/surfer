@@ -82,6 +82,7 @@ use crate::annotation::Annotation;
 use crate::annotation_list::AnnotationGroup;
 use crate::annotation_list::DEFAULT_GROUP_NAME;
 use crate::arrow::ArrowAnnotation;
+#[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use crate::channels::checked_send;
 use crate::comment::CommentMessage;
 use crate::config::AutoLoad;

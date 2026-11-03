@@ -868,8 +868,13 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     displayed_items.clone(),
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
-                        let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(&alpha_idx)
+                        let alpha_numer_idx: String =
+                            word.chars().take_while(|c| *c != '_').collect();
+                        alpha_numer_idx
+                            .parse::<usize>()
+                            .ok()
+                            .map(VisibleItemIndex)
+                            .or_else(|| alpha_idx_to_uint_idx(&alpha_numer_idx))
                             .map(|idx| Command::Terminal(Message::FocusItem(idx)))
                     }),
                 ),
@@ -1268,4 +1273,69 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fzcmd::parse_command;
+    use crate::{StartupParams, WaveSource, tests::snapshot::wait_for_waves_fully_loaded};
+    use project_root::get_project_root;
+
+    fn state_with_counter_scope() -> SystemState {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let _enter = runtime.enter();
+        std::thread::spawn(move || {
+            runtime.block_on(async {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                }
+            });
+        });
+
+        let mut state = SystemState::new_default_config()
+            .unwrap()
+            .with_params(StartupParams {
+                waves: Some(WaveSource::File(
+                    get_project_root()
+                        .unwrap()
+                        .join("examples/counter.vcd")
+                        .try_into()
+                        .unwrap(),
+                )),
+                ..Default::default()
+            });
+
+        wait_for_waves_fully_loaded(&mut state, 10);
+        state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false));
+        wait_for_waves_fully_loaded(&mut state, 10);
+        state
+    }
+
+    #[test]
+    fn item_focus_alpha_index_parses_to_matching_visible_item() {
+        let state = state_with_counter_scope();
+
+        let parsed = parse_command("item_focus b", get_parser(&state)).unwrap();
+
+        assert!(matches!(parsed, Message::FocusItem(VisibleItemIndex(1))));
+    }
+
+    #[test]
+    fn item_focus_numeric_indices_parse_directly() {
+        let state = state_with_counter_scope();
+
+        for idx in 0..=3 {
+            let parsed = parse_command(&format!("item_focus {idx}"), get_parser(&state)).unwrap();
+            assert!(
+                matches!(parsed, Message::FocusItem(VisibleItemIndex(parsed_idx)) if parsed_idx == idx),
+                "expected item_focus {idx} to target visible item {idx}, got {parsed:?}",
+            );
+        }
+    }
 }

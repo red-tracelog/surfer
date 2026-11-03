@@ -434,13 +434,29 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 ## Interactive simulation
 
+* ``simulation_connect [PORT]``
+
+  Connect to a running simulator plugin using optional `PORT` (default 6967 or the latest used it provided earlier).
+
+* ``simulation_run_for <TIME>``
+
+  Run the simulator for a bounded amount of simulated time.
+  `<TIME>` accepts plain ticks (for example `1000`) and, when timescale metadata is available,
+  unit-suffixed values such as `10ns` or `10 ns`.
+
+* ``simulation_run_all``
+
+  Run the simulator without a time bound until it reaches completion.
+
+## CXXRTL simulation
+
 * ``pause_simulation``
 
-  Pause a running simulation.
+  Pause a running CXXRTL simulation.
 
 * ``unpause_simulation``
 
-  Resume a paused simulation.
+  Resume a paused CXXRTL simulation.
 
 ## Debugging
 

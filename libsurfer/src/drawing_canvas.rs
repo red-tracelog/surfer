@@ -913,11 +913,7 @@ impl SystemState {
             );
         }
 
-        waves.draw_markers(
-            &self.user.config.theme,
-            &mut ctx,
-            &waves.viewports[viewport_idx],
-        );
+        waves.draw_markers(&self.user.config.theme, &mut ctx, viewport);
 
         self.draw_marker_boxes(waves, &mut ctx, viewport, row_offset);
 

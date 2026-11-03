@@ -6,10 +6,16 @@ use std::sync::{Arc, LazyLock};
 
 use futures::executor::block_on;
 use num::BigInt;
-use tokio::sync::Mutex;
-use tracing::{error, warn};
+use tokio::sync::{Mutex, Notify, oneshot};
+use tracing::{error, info, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+#[wasm_bindgen]
+extern "C" {
+    fn surfer_notify_host(message_json: &str);
+}
 
 use crate::DisplayedItem;
 use crate::EGUI_CONTEXT;
@@ -36,8 +42,12 @@ use crate::wave_source::CxxrtlKind;
 pub(crate) static MESSAGE_QUEUE: LazyLock<Mutex<Vec<Message>>> =
     LazyLock::new(|| Mutex::new(vec![]));
 
-static QUERY_QUEUE: LazyLock<tokio::sync::Mutex<VecDeque<Callback>>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(VecDeque::new()));
+static SIMULATION_PROXY_QUEUE: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static SIMULATION_PROXY_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+
+static QUERY_QUEUE: LazyLock<Mutex<VecDeque<Callback>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 // TODO: Let's make these take CXXRTL messages instead of strings
 pub(crate) static CXXRTL_SC_HANDLER: LazyLock<IngressHandler<String>> =
@@ -48,7 +58,7 @@ pub(crate) static CXXRTL_CS_HANDLER: LazyLock<GlobalChannelTx<String>> =
 
 struct Callback {
     function: Box<dyn FnOnce(&SystemState) + Send + Sync>,
-    executed: tokio::sync::oneshot::Sender<()>,
+    executed: oneshot::Sender<()>,
 }
 
 pub fn try_repaint() {
@@ -57,6 +67,11 @@ pub fn try_repaint() {
     } else {
         warn!("Attempted to request surfer repaint but surfer has not given us EGUI_CONTEXT yet")
     }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+pub(crate) fn notify_host(message_json: &str) {
+    surfer_notify_host(message_json);
 }
 
 /// Your handle to the web app from JavaScript.
@@ -143,8 +158,8 @@ pub fn inject_message(message: &str) {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn id_of_name(name: String) -> Option<usize> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let result = Arc::new(tokio::sync::Mutex::new(None));
+    let (tx, rx) = oneshot::channel();
+    let result = Arc::new(Mutex::new(None));
     let result_clone = result.clone();
     QUERY_QUEUE.lock().await.push_back(Callback {
         function: Box::new(move |state| {
@@ -220,8 +235,8 @@ async fn perform_query<T>(
 where
     T: Clone + Send + Sync + 'static,
 {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let result = Arc::new(tokio::sync::Mutex::new(None));
+    let (tx, rx) = oneshot::channel();
+    let result = Arc::new(Mutex::new(None));
     let result_clone = result.clone();
     QUERY_QUEUE.lock().await.push_back(Callback {
         function: Box::new(move |state| *block_on(result_clone.lock()) = query(state)),
@@ -310,6 +325,30 @@ pub async fn start_wcp() {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn inject_simulation_proxy_message(message: String) {
+    info!(
+        "[simulation] inject_simulation_proxy_message queued frame (base64 length: {})",
+        message.len()
+    );
+    block_on(SIMULATION_PROXY_QUEUE.lock()).push_back(message);
+    SIMULATION_PROXY_NOTIFY.notify_one();
+}
+
+pub async fn clear_simulation_proxy_messages() {
+    SIMULATION_PROXY_QUEUE.lock().await.clear();
+}
+
+pub async fn next_simulation_proxy_message() -> String {
+    loop {
+        let notified = SIMULATION_PROXY_NOTIFY.notified();
+        if let Some(message) = SIMULATION_PROXY_QUEUE.lock().await.pop_front() {
+            return message;
+        }
+        notified.await;
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn next_wcp_sc_message() -> Result<Option<String>, JsError> {
     WCP_SC_HANDLER
         .rx
@@ -355,6 +394,7 @@ impl StartupParams {
             waves: url.load_url.map(WaveSource::Url),
             wcp_initiate: None,
             startup_commands: url.startup_commands.map(|c| vec![c]).unwrap_or_default(),
+            simulator: None,
         }
     }
 }

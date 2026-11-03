@@ -44,6 +44,17 @@ function register_message_listener() {
         break
       }
 
+      case 'simulationProxyFrame': {
+        inject_simulation_proxy_message(decoded.frame);
+        break
+      }
+
+      case 'simulationProxyFailed': {
+        // Empty bridge messages signal EOF, so Rust drops partial reassembly.
+        inject_simulation_proxy_message("")
+        break
+      }
+
       default:
         console.log(`Unknown message.command ${decoded.command}`)
         break;

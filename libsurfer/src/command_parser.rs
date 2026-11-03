@@ -1,4 +1,5 @@
 //! Command prompt handling.
+use num::ToPrimitive;
 use regex::Regex;
 use std::sync::LazyLock;
 use std::{fs, str::FromStr};
@@ -369,6 +370,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "frame_buffer_set_width",
             "frame_buffer_set_range",
             "memory_viewer_open",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             "pause_simulation",
             "unpause_simulation",
             "undo",
@@ -400,6 +403,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_mouse_gestures",
             "show_quick_start",
             "show_logs",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             #[cfg(not(target_arch = "wasm32"))]
             "create_default_config",
             #[cfg(feature = "performance_plot")]
@@ -415,6 +420,10 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         commands.push("surver_switch_file");
     }
 
+    if state.is_simulation() {
+        commands.push("simulation_run_for");
+        commands.push("simulation_run_all");
+    }
     let mut theme_names = state.user.config.theme.theme_names.clone();
     let state_file = state.user.state_file.clone();
     let show_hierarchy = state.show_hierarchy();
@@ -1254,6 +1263,47 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         Some(Command::Terminal(Message::SetActiveViewport(idx)))
                     }),
                 ),
+                "simulation_run_for" => {
+                    let timescale_for_run = timescale.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Rest,
+                        vec![],
+                        Box::new(move |query, _| {
+                            let query = query.trim();
+                            if query.is_empty() {
+                                return None;
+                            }
+
+                            let time = if let Some(ts) = &timescale_for_run {
+                                crate::time::parse_time_string_to_ticks(query, ts)?.to_u64()?
+                            } else {
+                                query.parse::<u64>().ok()?
+                            };
+
+                            Some(Command::Terminal(Message::SimulatorPluginRunFor(Some(
+                                time,
+                            ))))
+                        }),
+                    ))
+                }
+                "simulation_run_all" => {
+                    Some(Command::Terminal(Message::SimulatorPluginRunFor(None)))
+                }
+                "simulation_connect" => Some(Command::NonTerminal(
+                    ParamGreed::Rest,
+                    vec![],
+                    Box::new(move |query, _| {
+                        let query = query.trim();
+                        if query.is_empty() {
+                            Some(Command::Terminal(Message::SimulatorPluginConnectTo))
+                        } else {
+                            Some(Command::Terminal(Message::Batch(vec![
+                                Message::SimulatorPluginSetAddress(query.to_owned()),
+                                Message::SimulatorPluginConnectTo,
+                            ])))
+                        }
+                    }),
+                )),
                 "pause_simulation" => Some(Command::Terminal(Message::PauseSimulation)),
                 "unpause_simulation" => Some(Command::Terminal(Message::UnpauseSimulation)),
                 "undo" => Some(Command::Terminal(Message::Undo(1))),
@@ -1268,4 +1318,34 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod simulator_address_tests {
+    use super::*;
+
+    #[test]
+    fn simulator_connection_targets_preserve_host_and_port() {
+        let state = SystemState::new_default_config().unwrap();
+        for target in [
+            "7777",
+            "simulator.example",
+            "simulator.example:7777",
+            "[::1]:7777",
+            "::1",
+        ] {
+            let message = crate::fzcmd::parse_command(
+                &format!("simulation_connect {target}"),
+                get_parser(&state),
+            )
+            .unwrap();
+            let Message::Batch(messages) = message else {
+                panic!("expected a batch for {target}");
+            };
+            assert!(matches!(&messages[..], [
+                Message::SimulatorPluginSetAddress(address),
+                Message::SimulatorPluginConnectTo,
+            ] if address == target));
+        }
+    }
 }

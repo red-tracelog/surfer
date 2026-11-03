@@ -45,6 +45,7 @@ pub mod overview;
 pub mod rectangle;
 pub mod remote;
 pub mod server_file_window;
+pub mod simulation;
 pub mod state;
 pub mod state_file_io;
 pub mod state_util;
@@ -77,6 +78,7 @@ pub mod wave_source;
 pub mod wcp;
 pub mod wellen;
 
+use crate::analog_signal_cache::AnalogCacheEntry;
 use crate::annotation::Annotatable;
 use crate::annotation::Annotation;
 use crate::annotation_list::AnnotationGroup;
@@ -90,6 +92,7 @@ use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
 use crate::rectangle::RectAnnotation;
 use crate::remote::get_time_table_from_server;
+use crate::simulation::displayed_item_ref_to_sim_id_if_last_instance;
 use crate::variable_name_type::VariableNameType;
 
 use std::collections::HashMap;
@@ -114,12 +117,12 @@ use itertools::Itertools;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
+use surfer_simulator_protocol::SurferToSimulatorMessage;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
-#[cfg(target_arch = "wasm32")]
-use tokio_stream as _;
-use tracing::{error, info, warn};
+use tokio::sync::mpsc::{Receiver as TReceiver, Sender as TSender, UnboundedSender};
+use tracing::{debug, error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
 use wave_container::ScopeRef;
@@ -139,7 +142,7 @@ use crate::transaction_container::{TransactionRef, TransactionStreamRef};
 use crate::translation::{AnyTranslator, all_translators};
 use crate::variable_filter::{VariableIOFilterType, VariableNameFilterType};
 use crate::viewport::Viewport;
-use crate::wave_container::{ScopeRefExt, VariableRefExt, WaveContainer};
+use crate::wave_container::{ScopeRefExt, SimulationStatus, VariableRefExt, WaveContainer};
 use crate::wave_data::WaveData;
 use crate::wave_source::{LoadOptions, WaveFormat, WaveSource};
 use crate::wellen::{HeaderResult, convert_format};
@@ -169,6 +172,12 @@ pub struct StartupParams {
     pub waves: Option<WaveSource>,
     pub wcp_initiate: Option<u16>,
     pub startup_commands: Vec<String>,
+    pub simulator: Option<SimulatorStartupParams>,
+}
+
+#[derive(Default)]
+pub struct SimulatorStartupParams {
+    pub address: Option<String>,
 }
 
 fn setup_custom_font(ctx: &egui::Context) {
@@ -255,18 +264,25 @@ struct CachedTransactionDrawData {
 pub struct Channels {
     pub msg_sender: Sender<Message>,
     pub msg_receiver: Receiver<Message>,
+    pub simulator_plugin_msg_sender: Sender<Message>,
+    pub simulator_plugin_msg_receiver: Receiver<Message>,
+    pub simulator_plugin_tx: Option<UnboundedSender<SurferToSimulatorMessage>>,
     #[cfg(target_arch = "wasm32")]
     wcp_c2s_receiver: Option<IngressReceiver<WcpCSMessage>>,
     #[cfg(not(target_arch = "wasm32"))]
-    wcp_c2s_receiver: Option<tokio::sync::mpsc::Receiver<WcpCSMessage>>,
-    wcp_s2c_sender: Option<tokio::sync::mpsc::Sender<WcpSCMessage>>,
+    wcp_c2s_receiver: Option<TReceiver<WcpCSMessage>>,
+    wcp_s2c_sender: Option<TSender<WcpSCMessage>>,
 }
 impl Channels {
     fn new() -> Self {
         let (msg_sender, msg_receiver) = mpsc::channel();
+        let (simulator_plugin_msg_sender, simulator_plugin_msg_receiver) = mpsc::channel();
         Self {
             msg_sender,
             msg_receiver,
+            simulator_plugin_msg_sender,
+            simulator_plugin_msg_receiver,
+            simulator_plugin_tx: None,
             wcp_c2s_receiver: None,
             wcp_s2c_sender: None,
         }
@@ -313,6 +329,88 @@ impl SystemState {
             tracing::trace!("{message:?}");
         }
         match message {
+            Message::SimulatorPluginConnectionClosed => {
+                info!("[simulation] Proxy connection to plugin failed or closed");
+                self.progress_tracker = None;
+                if let Some(container) = self
+                    .user
+                    .waves
+                    .as_mut()
+                    .and_then(|waves| waves.inner.as_waves_mut())
+                    && container.simulation_status().is_some()
+                {
+                    container.set_simulation_status(SimulationStatus::Finished);
+                }
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }
+            }
+            Message::SimulatorPluginSetAddress(bind_address) => {
+                let bind_address = bind_address.trim().to_string();
+                self.simulator_connection_address = if bind_address.is_empty() {
+                    None
+                } else {
+                    Some(bind_address)
+                };
+            }
+            Message::SimulatorPluginSetSimulatorInfo(simulator_info) => {
+                self.simulator_info = simulator_info;
+            }
+            Message::SimulatorPluginOpenConnectToSimulatorDialog => {
+                self.show_connect_to_simulator_dialog = true;
+            }
+            Message::SimulatorPluginRunFor(time) => {
+                self.simulator_run_for_duration(time);
+            }
+            Message::SimulatorPluginPause => {
+                if let Some(tx) = &self.channels.simulator_plugin_tx {
+                    if let Err(e) = tx.send(SurferToSimulatorMessage::PauseSimulation) {
+                        error!(
+                            "Failed to send pause simulation message to simulator: {}",
+                            e
+                        );
+                    }
+                } else {
+                    error!("Not connected to plugin!");
+                }
+            }
+            Message::SimulatorPluginGetHierarchy => {
+                if let Some(tx) = &self.channels.simulator_plugin_tx {
+                    if let Err(e) = tx.send(SurferToSimulatorMessage::RequestHierarchy) {
+                        error!(
+                            "Failed to send request hierarchy message to simulator: {}",
+                            e
+                        );
+                    }
+                } else {
+                    error!("Not connected to plugin!");
+                }
+            }
+
+            Message::SimulatorPluginDataReceived(time_steps, status) => {
+                debug!(
+                    "Received value changes from plugin: {} time steps, status: {:?}",
+                    time_steps.len(),
+                    &status
+                );
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+                self.simulator_plugin_data_received(time_steps, status);
+            }
+            Message::SimulatorPluginHierarchyReceived(plugin_hierarchy, time_unit) => {
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+                self.simulator_plugin_hierarchy_received(plugin_hierarchy, time_unit);
+            }
+            Message::SimulatorPluginConnectTo => {
+                self.simulator_info = None;
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+                self.connect_to_simulator_plugin();
+            }
+            Message::SimulatorPluginTimeUpdated(time) => {
+                self.user.plugin_sim_time = Some(time);
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }
+            }
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
                 waves.set_active_scope(scope)?;
@@ -329,6 +427,7 @@ impl SystemState {
                         format!("Add {} variables", vars.len())
                     };
                     self.save_current_canvas(undo_msg);
+                    self.simulator_track_variables(&vars);
                     if let Some(waves) = self.user.waves.as_mut() {
                         if let (Some(cmd), _) =
                             waves.add_variables(&self.translators, vars, None, true, false, None)
@@ -369,6 +468,7 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(&scope, recursive);
+                self.simulator_track_variables(&vars);
                 let waves = self.user.waves.as_mut()?;
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
@@ -377,16 +477,18 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
+                let vars = self.get_scope(&scope, recursive);
+                self.simulator_track_variables(&vars);
                 let waves = self.user.waves.as_mut()?;
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
-                self.add_scope_as_group(&scope, target, recursive, None);
+                self.add_scope_as_group(&scope, target, recursive);
+
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -400,9 +502,9 @@ impl SystemState {
             }
             Message::AddStreamOrGenerator(s) => {
                 let undo_msg = if let Some(gen_id) = s.gen_id {
-                    format!("Add generator(id: {gen_id})")
+                    format!("Add generator (id: {gen_id})")
                 } else {
-                    format!("Add stream(id: {})", s.stream_id)
+                    format!("Add stream (id: {})", s.stream_id)
                 };
                 self.save_current_canvas(undo_msg);
 
@@ -421,7 +523,7 @@ impl SystemState {
                 self.invalidate_draw_commands();
             }
             Message::AddAllFromStreamScope(scope_name) => {
-                self.save_current_canvas(format!("Add all from scope {}", scope_name.clone()));
+                self.save_current_canvas(format!("Add all from scope: {scope_name}"));
                 let waves = self.user.waves.as_mut()?;
                 waves.add_all_from_stream_scope(scope_name)?;
                 self.invalidate_draw_commands();
@@ -693,33 +795,29 @@ impl SystemState {
                             format!("Remove item {name}")
                         });
                     self.save_current_canvas(undo_msg);
-
-                    if let Some(waves) = self.user.waves.as_mut()
-                        && let Some(item_ref) = item_ref
-                    {
-                        waves.remove_displayed_item(item_ref);
-                        waves.compute_variable_display_names();
+                    if let Some(item_ref) = item_ref {
+                        self.remove_displayed_items(vec![item_ref]);
                     }
                 }
                 MessageTarget::CurrentSelection => {
                     self.save_current_canvas("Remove selected items".to_owned());
-                    let waves = self.user.waves.as_mut()?;
-
-                    let mut remove_ids: Vec<_> = waves
-                        .items_tree
-                        .iter_visible_selected()
-                        .map(|node| node.item_ref)
-                        .collect();
-                    if let Some(node) = waves
-                        .focused_item
-                        .and_then(|focus| waves.items_tree.get_visible(focus))
+                    let mut remove_ids = Vec::new();
                     {
-                        remove_ids.push(node.item_ref);
+                        let waves = self.user.waves.as_mut()?;
+                        remove_ids.extend(
+                            waves
+                                .items_tree
+                                .iter_visible_selected()
+                                .map(|node| node.item_ref),
+                        );
+                        if let Some(node) = waves
+                            .focused_item
+                            .and_then(|focus| waves.items_tree.get_visible(focus))
+                        {
+                            remove_ids.push(node.item_ref);
+                        }
                     }
-                    for &item_ref in &remove_ids {
-                        waves.remove_displayed_item(item_ref);
-                    }
-                    waves.compute_variable_display_names();
+                    self.remove_displayed_items(remove_ids);
                 }
             },
             Message::RemoveItems(items) => {
@@ -741,11 +839,12 @@ impl SystemState {
                     })
                     .unwrap_or_default();
                 self.save_current_canvas(undo_msg);
-
-                let waves = self.user.waves.as_mut()?;
-                for id in items.iter().sorted_unstable_by(|a, b| Ord::cmp(b, a)) {
-                    waves.remove_displayed_item(*id);
-                }
+                let remove_ids = items
+                    .iter()
+                    .sorted_unstable_by(|a, b| Ord::cmp(b, a))
+                    .copied()
+                    .collect();
+                self.remove_displayed_items(remove_ids);
             }
             Message::MoveFocusedItem(direction, count) => {
                 self.save_current_canvas(format!("Move item {direction}, {count}"));
@@ -946,6 +1045,7 @@ impl SystemState {
                                 update_format(variable, field_ref);
                             }
                             redraw = true;
+                            info!("is this where i end up?");
                         }
                     }
                 }
@@ -1367,10 +1467,12 @@ impl SystemState {
                     }
                 }
             }
-            Message::WaveBodyLoaded(start, source, body) => {
+            Message::WaveBodyLoaded(start, source, body, status) => {
                 // for files using the `wellen` backend, parse the body in a second step
                 info!("Loaded the body of {source} in {:?}", start.elapsed());
-                self.progress_tracker = None;
+                if !matches!(status, Some(SimulationStatus::Running)) {
+                    self.progress_tracker = None;
+                }
                 let enable_time_offset = self.enable_time_offset();
                 let waves = self
                     .user
@@ -1598,6 +1700,7 @@ impl SystemState {
                             self.user.selected_server_file_index,
                         );
                     }
+                    WaveSource::SimulatorPlugin => {} // can't reload
                 }
 
                 for translator in self.translators.all_translators() {
@@ -1922,6 +2025,7 @@ impl SystemState {
                 }
             }
             Message::AddDraggedVariables(variables) => {
+                self.simulator_track_variables(&variables);
                 let waves = self.user.waves.as_mut()?;
 
                 waves.focused_item = None;
@@ -2151,9 +2255,7 @@ impl SystemState {
                     .iter()
                     .enumerate()
                     .filter_map(|(idx, node)| {
-                        item_refs
-                            .contains(&node.item_ref)
-                            .then_some(crate::displayed_item_tree::ItemIndex(idx))
+                        item_refs.contains(&node.item_ref).then_some(ItemIndex(idx))
                     })
                     .collect::<Vec<_>>();
 
@@ -2340,10 +2442,7 @@ impl SystemState {
                 };
 
                 // Create new entry and spawn builder
-                let entry = std::sync::Arc::new(crate::analog_signal_cache::AnalogCacheEntry::new(
-                    cache_key.clone(),
-                    generation,
-                ));
+                let entry = Arc::new(AnalogCacheEntry::new(cache_key.clone(), generation));
 
                 if let DisplayedItem::Variable(var) = waves.displayed_items.get_mut(&display_id)? {
                     var.analog.as_mut()?.cache = Some(entry.clone());
@@ -2364,7 +2463,7 @@ impl SystemState {
                 );
             }
             Message::AnalogCacheBuilt { entry, result } => {
-                OUTSTANDING_TRANSACTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                OUTSTANDING_TRANSACTIONS.fetch_sub(1, Ordering::SeqCst);
                 // Remove from in-flight registry (may already be gone if generation changed)
                 if let Some(waves) = self.user.waves.as_mut() {
                     waves.inflight_caches.remove(&entry.cache_key);
@@ -2379,6 +2478,7 @@ impl SystemState {
                 }
                 self.invalidate_draw_commands();
             }
+
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {
                 let waves = self.user.waves.as_mut()?;
@@ -2686,7 +2786,6 @@ impl SystemState {
         scope: &ScopeRef,
         pos: TargetPosition,
         recursive: bool,
-        variable_name_type: Option<VariableNameType>,
     ) -> TargetPosition {
         let Some(waves) = self.user.waves.as_mut() else {
             return pos;
@@ -2702,11 +2801,6 @@ impl SystemState {
             .cloned()
             .collect_vec();
         let child_scopes = container.child_scopes(scope);
-        let variable_name_type = variable_name_type.or_else(|| {
-            container
-                .scope_is_variable(scope)
-                .then_some(VariableNameType::Local)
-        });
 
         waves.add_group(scope.name(), Some(pos));
         let into_group_pos = TargetPosition {
@@ -2720,7 +2814,7 @@ impl SystemState {
             Some(into_group_pos),
             false,
             false,
-            variable_name_type,
+            Some(VariableNameType::Local),
         );
         let mut into_group_pos = TargetPosition {
             before: ItemIndex(into_group_pos.before.0 + variable_refs.len()),
@@ -2733,12 +2827,46 @@ impl SystemState {
 
         if recursive {
             for child in child_scopes.unwrap_or(vec![]) {
-                into_group_pos =
-                    self.add_scope_as_group(&child, into_group_pos, recursive, variable_name_type);
+                into_group_pos = self.add_scope_as_group(&child, into_group_pos, recursive);
                 into_group_pos.level = pos.level + 1;
             }
         }
         into_group_pos
+    }
+
+    fn remove_displayed_items(&mut self, item_refs: Vec<DisplayedItemRef>) {
+        if item_refs.is_empty() {
+            return;
+        }
+
+        let is_simulation = self.is_simulation();
+        let signal_ref_to_id = self.signal_ref_to_id.clone();
+
+        // This must happen after is_simulation and signal ids are collected as self is borrowed mutably.
+        let Some(waves) = self.user.waves.as_mut() else {
+            return;
+        };
+
+        let mut ids_to_untrack = Vec::new();
+
+        for item_ref in item_refs {
+            let id_to_untrack = displayed_item_ref_to_sim_id_if_last_instance(
+                item_ref,
+                &waves.displayed_items,
+                waves.inner.as_waves(),
+                signal_ref_to_id.as_ref(),
+                is_simulation,
+            );
+
+            if let Some(id) = id_to_untrack {
+                ids_to_untrack.push(id);
+            }
+
+            waves.remove_displayed_item(item_ref);
+        }
+
+        waves.compute_variable_display_names();
+        self.simulator_untrack_variables(&ids_to_untrack);
     }
 
     fn handle_variable_clipboard_operation<F>(

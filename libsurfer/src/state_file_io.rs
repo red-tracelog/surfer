@@ -91,7 +91,10 @@ pub(crate) fn source_file_stem(source: &WaveSource) -> Option<&str> {
             let stem = filename.rsplit_once('.').map_or(filename, |(head, _)| head);
             if stem.is_empty() { None } else { Some(stem) }
         }
-        WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
+        WaveSource::Data
+        | WaveSource::DragAndDrop(None)
+        | WaveSource::Cxxrtl(_)
+        | WaveSource::SimulatorPlugin => None,
     }
 }
 

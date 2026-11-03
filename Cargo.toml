@@ -3,14 +3,27 @@ resolver = "2"
 
 members = [
     "surfer",
+    "surfer-simulator-protocol",
+    "surfer-time-types",
     "surfer-translation-types",
+    "surfer-vhpi-plugin",
+    "surfer-vpi-plugin",
     "surfer-wcp",
     "surver",
     "translator-docs",
     "wasm_example_translator",
 ]
 exclude = [".cache"]
-default-members = ["surfer", "surver", "libsurfer"]
+default-members = [
+    "surfer",
+    "surver",
+    "libsurfer",
+    "surfer-time-types",
+    "surfer-translation-types",
+    "surfer-simulator-protocol",
+    "surfer-vpi-plugin",
+    "surfer-vhpi-plugin",
+]
 
 [workspace.package]
 version = "0.7.0"
@@ -26,11 +39,12 @@ ahash = { version = "0.8", default-features = false }
 base64 = "0.23"
 bincode = "1.3.3"
 bytes = "1.11"
-bytesize = "2.3.1"
+bytesize = "2.4.2"
 camino = { version = "1.1.6", default-features = false, features = ["serde1"] }
 chrono = { version = "0.4.31", default-features = false, features = ["std", "wasmbind"] }
 clap = { version = "4.6", default-features = false, features = ['std', 'derive', 'help', 'usage', 'error-context', 'color'] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
+dashmap = "6.1.0"
 derive_more = { version = "2.1", default-features = false, features = [
     "add",
     "add_assign",
@@ -78,13 +92,15 @@ instruction-decoder = { git = "https://github.com/ics-jku/instruction-decoder.gi
 itertools = "0.15.0"
 leb128 = "0.2.5"
 local-impl = "0.1.2"
-lz4_flex = "0.13"
+lz4_flex = "0.14"
 notify = "8.0"
 num = { version = "0.4", features = ["serde"] }
 numeric-sort = "0.1.4"
 png = "0.18"
 port_check = "0.3"
+portable-atomic = "1.13"
 project-root = "0.2.2"
+prost = "0.14"
 pure-rust-locales = "0.8.1"
 pyo3 = { version = "0.30", features = ["auto-initialize", "abi3"] }
 rayon = "1.10.0"
@@ -99,6 +115,10 @@ serde = { version = "1.0.218", default-features = false, features = ["derive"] }
 serde_json = "1.0.139"
 simple-eyre = "0.3.1"
 softposit = "0.4.0"
+surfer-simulator-protocol = { path = "surfer-simulator-protocol" }
+surfer-time-types = { path = "surfer-time-types" }
+surfer-translation-types = { path = "surfer-translation-types" }
+surfer-wcp = { path = "surfer-wcp" }
 surver = { path = "surver", default-features = false }
 sys-locale = "0.3.2"
 tempfile = "3.20.0"
@@ -106,14 +126,17 @@ test-log = "0.2.15"
 thiserror = "2"
 tokio = { version = "1.43", default-features = false, features = ["io-util", "rt", "time", "macros"] }
 tokio-stream = "0.1.17"
+tokio-util = { version = "0.7.18", features = ["codec"] }
 toml = { version = "1.1", default-features = false, features = ["parse"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt", "registry"] }
 vergen-gitcl = "9.1"
-wasm-bindgen = "0.2.126"
-wasm-bindgen-futures = "0.4.76"
+vhpi = { version = "0.6.0", features = ["dynamic"] }
+vpi = { version = "0.7.1", default-features = false, features = ["sv", "dynamic"] }
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4.80"
 wasm-tracing = "2.1"
-web-sys = { version = "= 0.3.106", default-features = false, features = ["Location", "Navigator", "UrlSearchParams", "Window"] }
+web-sys = { version = "= 0.3.107", default-features = false, features = ["Location", "Navigator", "UrlSearchParams", "Window"] }
 web-time = { version = "1.1.0", default-features = false }
 wellen = { version = "0.25.6", default-features = false, features = ["serde1"] }
 whoami = { version = "2", default-features = false, features = ["std"] }

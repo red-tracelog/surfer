@@ -9,7 +9,7 @@ mod main_impl {
     use eyre::Result;
     use eyre::WrapErr as _;
     use libsurfer::{
-        EGUI_CONTEXT, StartupParams, SystemState,
+        EGUI_CONTEXT, SimulatorStartupParams, StartupParams, SystemState,
         batch_commands::read_command_file,
         file_watcher::FileWatcher,
         logs,
@@ -37,6 +37,13 @@ mod main_impl {
             #[arg(long)]
             file: String,
         },
+
+        /// Start Surfer and connect to a simulator
+        Sim {
+            #[clap(long, alias = "port")]
+            /// Port (on localhost), host, or host:port to connect to
+            address: Option<String>,
+        },
     }
 
     #[derive(clap::Parser, Default)]
@@ -52,7 +59,7 @@ mod main_impl {
         /// is implemented.
         #[clap(long, short, verbatim_doc_comment)]
         command_file: Option<Utf8PathBuf>,
-        /// Alias for --`command_file` to let `VUnit` use the same argument for both Surfer and GTKWave.
+        /// Alias for --`command_file` to let `VUnit` use the same argument for both Surfer and `GTKWave`.
         #[clap(long)]
         script: Option<Utf8PathBuf>,
         /// SUCL commands to run after a waveform has been loaded, given directly on the
@@ -97,10 +104,16 @@ mod main_impl {
                 .map(read_command_file)
                 .unwrap_or_default(),
         );
+        let simulator = if let Some(Commands::Sim { address }) = args.command {
+            Some(SimulatorStartupParams { address })
+        } else {
+            None
+        };
         StartupParams {
             waves: args.wave_file.map(|s| string_to_wavesource(&s)),
             wcp_initiate: args.wcp_initiate,
             startup_commands,
+            simulator,
         }
     }
 
@@ -128,7 +141,6 @@ mod main_impl {
 
         // parse arguments
         let args = Args::parse();
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(Commands::Server {
             port,
             bind_address,
@@ -302,6 +314,28 @@ mod main_impl {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn simulator_connection_targets_accept_address_and_port_alias() {
+            for option in ["--address", "--port"] {
+                for target in ["7777", "simulator.example", "[::1]:7777"] {
+                    let args = Args::try_parse_from(["surfer", "sim", option, target]).unwrap();
+                    let params = startup_params_from_args(args);
+                    assert_eq!(params.simulator.unwrap().address.as_deref(), Some(target));
+                }
+            }
+            assert!(
+                Args::try_parse_from([
+                    "surfer",
+                    "sim",
+                    "--port",
+                    "7777",
+                    "--address",
+                    "simulator.example",
+                ])
+                .is_err()
+            );
+        }
 
         #[test]
         fn command_file_prefers_single_sources() {

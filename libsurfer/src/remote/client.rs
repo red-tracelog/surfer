@@ -305,7 +305,7 @@ pub fn get_time_table_from_server(sender: Sender<Message>, server: String, file_
         };
         checked_send(
             &sender,
-            Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server)),
+            Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server), None),
         );
     });
 }

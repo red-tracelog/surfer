@@ -1,4 +1,4 @@
-use crate::time::{TimeScale, TimeUnit};
+use crate::time::{TimeScale, time_unit_from_ftr};
 use crate::wave_container::MetaData;
 use ftr_parser::types::{
     FTR, GeneratorId, StreamId, Transaction, TransactionId, TxGenerator, TxStream,
@@ -154,7 +154,7 @@ impl TransactionContainer {
             date: None,
             version: None,
             timescale: TimeScale {
-                unit: TimeUnit::from(self.inner.time_scale),
+                unit: time_unit_from_ftr(self.inner.time_scale),
                 multiplier: None,
             },
         }

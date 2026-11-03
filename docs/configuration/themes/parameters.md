@@ -16,22 +16,22 @@ For a complete example, see the [default theme](https://gitlab.com/surfer-projec
 ## Example
 
 ```toml
-foreground = "d4d4d4"
-border_color = "282b2d"
-highlight_background = "37485E"
-cursor = { color = "b63935", width = 2 }
+foreground = "#d4d4d4"
+border_color = "#282b2d"
+highlight_background = "#37485E"
+cursor = { color = "#b63935", width = 2 }
 
-canvas_colors = { background = "0b151d", alt_background = "1b252d", foreground = "d4d4d4" }
-primary_ui_color = { background = "171717", foreground = "d4d4d4" }
-selected_elements_colors = { background = "444444", foreground = "d4d4d4" }
+canvas_colors = { background = "#0b151d", alt_background = "#1b252d", foreground = "d4d4d4" }
+primary_ui_color = { background = "#171717", foreground = "#d4d4d4" }
+selected_elements_colors = { background = "#444444", foreground = "#d4d4d4" }
 
 [colors]
-Green = "6a9955"
-Red = "f44747"
+Green = "#6a9955"
+Red = "#f44747"
 
 [ticks]
 density = 1.0
-style = { color = "222222", width = 2 }
+style = { color = "#222222", width = 2 }
 ```
 
 ## Top-level parameters
@@ -80,6 +80,7 @@ style = { color = "222222", width = 2 }
 | `ticks` | [`SurferTicks`](#surferticks) | Tick line density and style. |
 | `scope_icons` | [`ScopeIcons`](#scopeicons) | Optional icon overrides for scope types in the hierarchy. |
 | `variable_icons` | [`VariableIcons`](#variableicons) | Optional icon overrides for variable types in the hierarchy. |
+| `log_colors` | [`LogColors`](#logcolors) | Colors used for different types in log and simulation output windows. |
 
 `theme_names` exists internally in the theme data model but is populated by Surfer itself and should not be set in a theme file.
 
@@ -91,9 +92,9 @@ Example:
 
 ```toml
 [colors]
-Green = "6a9955"
-Red = "f44747"
-Blue = "569cd6"
+Green = "#6a9955"
+Red = "#f44747"
+Blue = "#569cd6"
 ```
 
 Each key is an arbitrary user-visible color name and each value is a hex RGB color (with or without a leading `#`).
@@ -105,7 +106,7 @@ Each key is an arbitrary user-visible color name and each value is a hex RGB col
 Used by `primary_ui_color`, `secondary_ui_color`, `selected_elements_colors`, `accent_info`, `accent_warn`, and `accent_error`.
 
 ```toml
-primary_ui_color = { background = "171717", foreground = "d4d4d4" }
+primary_ui_color = { background = "#171717", foreground = "#d4d4d4" }
 ```
 
 | Field | Type | Description |
@@ -147,7 +148,7 @@ Used by `ticks`.
 ```toml
 [ticks]
 density = 1.0
-style = { color = "222222", width = 2 }
+style = { color = "#222222", width = 2 }
 ```
 
 | Field | Type | Description |
@@ -161,7 +162,7 @@ Used by `relation_arrow`.
 
 ```toml
 [relation_arrow]
-style = { color = "c61521", width = 1.3 }
+style = { color = "#c61521", width = 1.3 }
 head_angle = 25
 head_length = 8
 ```
@@ -227,9 +228,9 @@ The nested `[scope_icons.colors]` table accepts the same keys as `[scope_icons]`
 
 ```toml
 [scope_icons.colors]
-module = "4FC3F7"
-function = "BA68C8"
-package = "FFD54F"
+module = "#4FC3F7"
+function = "#BA68C8"
+package = "#FFD54F"
 ```
 
 ### `VariableIcons`
@@ -261,15 +262,32 @@ The nested `[variable_icons.colors]` table accepts the same keys as `[variable_i
 
 ```toml
 [variable_icons.colors]
-wire = "81C784"
-bus = "64B5F6"
-string = "FFB74D"
-event = "F06292"
-other = "BA68C8"
+wire = "#81C784"
+bus = "#64B5F6"
+string = "#FFB74D"
+event = "#F06292"
+other = "#BA68C8"
+```
+
+### `LogColors`
+
+Use a `log_colors` table to override colors used for log and simulation output windows.
+
+Supported keys are:
+
+- `trace`
+- `debug`
+- `info`: Corresponds to VHDL `note` severity level.
+- `warning`
+- `error`
+- `failure`: Simulation only, corresponds to `$fatal` in Verilog.
+
+```toml
+[log_colors]
+failure = "#fb5ede"
 ```
 
 ## Notes
 
 - A theme file may define only a subset of keys when it is intended to override an existing theme.
 - The `colors` table is separate from UI palette settings; it exists so commands can refer to stable names like `Green` or `Orange`.
-- Icon color tables are optional. If omitted, Surfer uses built-in defaults for icon colors.

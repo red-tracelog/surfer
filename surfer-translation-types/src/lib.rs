@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn extend_string_weird_char_and_empty_input() {
         // Unknown leading char results in no extension (empty), even if num_bits is larger
-        assert_eq!(extend_string("h101", 6), "");
+        assert_eq!(extend_string("q101", 6), "");
         assert_eq!(extend_string("?", 10), "");
 
         // Empty input yields empty extension as there is no leading char to guide

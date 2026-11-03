@@ -52,7 +52,7 @@ repos:
     hooks:
     - id: check-config-docs
       name: Check config docs
-      entry: python3 tools/check_theme_config_docs.py
+      entry: python tools/check_theme_config_docs.py
       language: system
       pass_filenames: false
       files: ^(default_config\.toml|docs/configuration/config/README\.md)$

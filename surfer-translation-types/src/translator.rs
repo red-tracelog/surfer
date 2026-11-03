@@ -79,6 +79,7 @@ pub enum WaveSource {
     DragAndDrop(Option<String>),
     Url(String),
     Cxxrtl,
+    Simulator(String),
 }
 
 /// The most general translator trait.

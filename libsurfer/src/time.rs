@@ -12,6 +12,7 @@ use num::{BigInt, BigRational, ToPrimitive, Zero};
 use pure_rust_locales::{Locale, locale_match};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+pub use surfer_time_types::{TimeScale, TimeUnit};
 use sys_locale::get_locale;
 
 use crate::config::SurferConfig;
@@ -23,56 +24,18 @@ use crate::{
     view::{DrawConfig, DrawingContext},
 };
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct TimeScale {
-    pub unit: TimeUnit,
-    pub multiplier: Option<u32>,
-}
-
-impl TimeScale {
-    pub(crate) fn multiplier_digits(&self) -> u8 {
-        match self.multiplier {
-            Some(1) => 0,
-            Some(10) => 1,
-            Some(100) => 2,
-            Some(multiplier) => multiplier.ilog10() as u8,
-            None => 0,
-        }
+#[must_use]
+pub fn time_unit_from_ftr(timescale: Timescale) -> TimeUnit {
+    match timescale {
+        Timescale::Fs => TimeUnit::FemtoSeconds,
+        Timescale::Ps => TimeUnit::PicoSeconds,
+        Timescale::Ns => TimeUnit::NanoSeconds,
+        Timescale::Us => TimeUnit::MicroSeconds,
+        Timescale::Ms => TimeUnit::MilliSeconds,
+        Timescale::S => TimeUnit::Seconds,
+        Timescale::Unit => TimeUnit::None,
+        Timescale::None => TimeUnit::None,
     }
-}
-
-#[derive(Debug, Clone, Copy, Display, Eq, PartialEq, Serialize, Deserialize, Sequence)]
-pub enum TimeUnit {
-    #[display("zs")]
-    ZeptoSeconds,
-
-    #[display("as")]
-    AttoSeconds,
-
-    #[display("fs")]
-    FemtoSeconds,
-
-    #[display("ps")]
-    PicoSeconds,
-
-    #[display("ns")]
-    NanoSeconds,
-
-    #[display("μs")]
-    MicroSeconds,
-
-    #[display("ms")]
-    MilliSeconds,
-
-    #[display("s")]
-    Seconds,
-
-    #[display("No unit")]
-    None,
-
-    /// Use the largest time unit feasible for each time.
-    #[display("Auto")]
-    Auto,
 }
 
 pub const DEFAULT_TIMELINE_NAME: &str = "Time";
@@ -112,69 +75,6 @@ fn create_cache(locale: Locale) -> LocaleFormatCache {
         grouping,
         thousands_sep,
         decimal_point,
-    }
-}
-
-impl From<wellen::TimescaleUnit> for TimeUnit {
-    fn from(timescale: wellen::TimescaleUnit) -> Self {
-        match timescale {
-            wellen::TimescaleUnit::ZeptoSeconds => TimeUnit::ZeptoSeconds,
-            wellen::TimescaleUnit::AttoSeconds => TimeUnit::AttoSeconds,
-            wellen::TimescaleUnit::FemtoSeconds => TimeUnit::FemtoSeconds,
-            wellen::TimescaleUnit::PicoSeconds => TimeUnit::PicoSeconds,
-            wellen::TimescaleUnit::NanoSeconds => TimeUnit::NanoSeconds,
-            wellen::TimescaleUnit::MicroSeconds => TimeUnit::MicroSeconds,
-            wellen::TimescaleUnit::MilliSeconds => TimeUnit::MilliSeconds,
-            wellen::TimescaleUnit::Seconds => TimeUnit::Seconds,
-            wellen::TimescaleUnit::Unknown => TimeUnit::None,
-        }
-    }
-}
-
-impl From<ftr_parser::types::Timescale> for TimeUnit {
-    fn from(timescale: Timescale) -> Self {
-        match timescale {
-            Timescale::Fs => TimeUnit::FemtoSeconds,
-            Timescale::Ps => TimeUnit::PicoSeconds,
-            Timescale::Ns => TimeUnit::NanoSeconds,
-            Timescale::Us => TimeUnit::MicroSeconds,
-            Timescale::Ms => TimeUnit::MilliSeconds,
-            Timescale::S => TimeUnit::Seconds,
-            Timescale::Unit => TimeUnit::None,
-            Timescale::None => TimeUnit::None,
-        }
-    }
-}
-
-impl TimeUnit {
-    /// Get the power-of-ten exponent for a time unit.
-    fn exponent(self) -> i8 {
-        match self {
-            TimeUnit::ZeptoSeconds => -21,
-            TimeUnit::AttoSeconds => -18,
-            TimeUnit::FemtoSeconds => -15,
-            TimeUnit::PicoSeconds => -12,
-            TimeUnit::NanoSeconds => -9,
-            TimeUnit::MicroSeconds => -6,
-            TimeUnit::MilliSeconds => -3,
-            TimeUnit::Seconds => 0,
-            TimeUnit::None => 0,
-            TimeUnit::Auto => 0,
-        }
-    }
-    /// Convert a power-of-ten exponent to a time unit.
-    fn from_exponent(exponent: i8) -> Option<Self> {
-        match exponent {
-            -21 => Some(TimeUnit::ZeptoSeconds),
-            -18 => Some(TimeUnit::AttoSeconds),
-            -15 => Some(TimeUnit::FemtoSeconds),
-            -12 => Some(TimeUnit::PicoSeconds),
-            -9 => Some(TimeUnit::NanoSeconds),
-            -6 => Some(TimeUnit::MicroSeconds),
-            -3 => Some(TimeUnit::MilliSeconds),
-            0 => Some(TimeUnit::Seconds),
-            _ => None,
-        }
     }
 }
 
@@ -747,7 +647,7 @@ impl SystemState {
                 Message::GoToTime(Some(time_stamp), 0)
             };
             // Render text edit and combobox
-            self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit);
+            self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit, true);
 
             // Go button (uses provided on_commit closure)
             let button_enabled = state.parsed_value.is_some();
@@ -777,7 +677,34 @@ impl SystemState {
         });
     }
 
+    /// Render simulation time input controls and commit Enter to `SimulatorPluginRunFor`.
+    ///
+    /// Returns the current parsed simulation duration in simulation ticks (`u64`) when valid.
+    pub(crate) fn simulation_time_input_widget(
+        &self,
+        ui: &mut Ui,
+        waves: &WaveData,
+        msgs: &mut Vec<Message>,
+        enabled: bool,
+    ) -> Option<u64> {
+        let id_prefix = "toolbar-sim-time";
+
+        // Acquire or create the TimeInputState for this id.
+        let mut widgets = self.time_widgets.borrow_mut();
+        let state = widgets.entry(id_prefix.to_string()).or_default();
+
+        let on_commit = |time_stamp: BigInt| Message::SimulatorPluginRunFor(time_stamp.to_u64());
+
+        // Reuse the shared controls and Enter handling.
+        self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit, enabled);
+
+        state
+            .to_timescale_ticks(&waves.inner.metadata().timescale)
+            .and_then(|time_stamp| time_stamp.to_u64())
+    }
+
     /// Render the shared text edit and unit combobox for a time input.
+    #[allow(clippy::too_many_arguments)]
     fn time_input_controls<F>(
         &self,
         ui: &mut Ui,
@@ -786,12 +713,14 @@ impl SystemState {
         waves: &WaveData,
         msgs: &mut Vec<Message>,
         on_commit: &F,
+        enabled: bool,
     ) where
         F: Fn(BigInt) -> Message,
     {
         // Text input field
         let mut input = state.input_text.clone();
-        let text_response = ui.add(
+        let text_response = ui.add_enabled(
+            enabled,
             egui::TextEdit::singleline(&mut input)
                 .desired_width(100.0)
                 .hint_text("e.g., 1.5ms"),

@@ -72,3 +72,11 @@ density = 1
 style = { color = "#c61521", width = 1.3 }
 head_angle = 25
 head_length = 8
+
+[log_colors]
+trace = "#808080"
+debug = "#3100d0"
+info = "#069b64"
+warn = "#ffd602"
+error = "#f44747"
+failure = "#8b0000"

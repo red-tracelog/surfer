@@ -1,0 +1,18 @@
+[package]
+name = "surfer-time-types"
+version.workspace = true
+license.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+wellen = ["dep:wellen"]
+
+[dependencies]
+derive_more.workspace = true
+enum-iterator.workspace = true
+serde.workspace = true
+wellen = { workspace = true, optional = true }

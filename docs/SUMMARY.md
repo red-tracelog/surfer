@@ -5,6 +5,7 @@
 - [Cursors and markers](cursors.md)
 - [Mouse gestures](mousegestures.md)
 - [Remote file access](remote.md)
+- [Simulation](./simulation/README.md)
 - [Translators](./plugins/README.md)
   - [Installing translator plugins](./plugins/installing_plugins.md)
   - [Writing translator plugins](./plugins/writing_plugins.md)

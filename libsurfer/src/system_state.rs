@@ -8,8 +8,11 @@ use std::{
     rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
-use surfer_translation_types::translator::VariableNameInfo;
+use surfer_simulator_protocol::SimId;
 use tokio::task::JoinHandle;
+use wellen::SignalRef;
+
+use surfer_translation_types::translator::VariableNameInfo;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
@@ -20,6 +23,7 @@ use crate::{
     memory_viewer::{MemoryViewerCache, MemoryViewerState},
     message::Message,
     mousegestures::AnnotationKind,
+    simulation::SimulatorInfo,
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
@@ -140,6 +144,15 @@ pub struct SystemState {
 
     pub(crate) annotation_id_source: u64,
     pub(crate) click_handled: bool,
+
+    /// Shows dialog for connecting to an already running simulator plugin.
+    pub(crate) show_connect_to_simulator_dialog: bool,
+
+    pub(crate) simulator_connection_address: Option<String>,
+    /// Metadata received from simulator handshake.
+    pub(crate) simulator_info: Option<SimulatorInfo>,
+
+    pub(crate) signal_ref_to_id: Option<AHashMap<SignalRef, SimId>>,
 }
 
 impl SystemState {
@@ -165,6 +178,7 @@ impl SystemState {
             file_history,
             translators,
             channels,
+            simulator_connection_address: None,
             progress_tracker: None,
             command_prompt: Default::default(),
             context: None,
@@ -202,6 +216,10 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
+            show_connect_to_simulator_dialog: false,
+            simulator_info: None,
+            signal_ref_to_id: None,
+
             url_callback: None,
             continuous_redraw: false,
             #[cfg(feature = "performance_plot")]

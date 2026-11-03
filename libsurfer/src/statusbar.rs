@@ -3,7 +3,7 @@ use emath::Align;
 use web_time::{Duration, Instant};
 
 use crate::time::{time_string, timeunit_menu};
-use crate::wave_source::draw_progress_information;
+use crate::wave_source::{WaveSource, draw_progress_information};
 use crate::{SystemState, message::Message, wave_data::WaveData};
 
 /// Debounce duration for progress information display (in milliseconds)
@@ -45,7 +45,16 @@ impl SystemState {
     /// Draw left-aligned status bar elements: wave source and generation date
     fn draw_statusbar_left(&self, ui: &mut Ui, waves: Option<&WaveData>) {
         if let Some(waves) = waves {
-            ui.label(waves.source.to_string());
+            let mut source_label = waves.source.to_string();
+            if matches!(&waves.source, WaveSource::SimulatorPlugin)
+                && let Some(simulator_info) = &self.simulator_info
+            {
+                source_label.push_str(&format!(
+                    " ({} {})",
+                    simulator_info.name, simulator_info.version,
+                ));
+            }
+            ui.label(source_label);
             if let Some(idx) = self.user.selected_server_file_index
                 && let Some(infos) = self.user.surver_file_infos.as_ref()
                 && let Some(file) = infos.get(idx)

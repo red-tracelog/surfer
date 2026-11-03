@@ -44,7 +44,7 @@ pub enum OpenMode {
     Switch,
 }
 
-pub(crate) struct FileFilter {
+pub struct FileFilter {
     name: &'static str,
     extensions: &'static [&'static str],
 }
@@ -105,12 +105,11 @@ impl SystemState {
         perform_async_work(async move {
             if let Some(file) = create_file_dialog(filter, title).pick_file().await {
                 let path = file.path().to_path_buf();
-                let result = match Utf8PathBuf::from_path_buf(path.clone()) {
-                    Ok(utf8_path) => messages(utf8_path),
-                    Err(_) => {
-                        error!("File path '{}' contains invalid UTF-8", path.display());
-                        vec![]
-                    }
+                let result = if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
+                    messages(utf8_path)
+                } else {
+                    error!("File path '{}' contains invalid UTF-8", path.display());
+                    vec![]
                 };
                 checked_send_many(&sender, result);
             }

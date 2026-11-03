@@ -36,7 +36,7 @@ workflow:
 .build-dependencies:
   before_script:
     - apt update -y
-    - apt install -y python3-dev
+    - apt install -y python3-dev libclang-dev
   interruptible: true
 
 .snapshots:
@@ -53,6 +53,8 @@ clippy:
     before_script:
         - rustup component add clippy
         - cargo install gitlab_clippy
+        - apt update -y
+        - apt install -y libclang-dev
     script:
       - cargo -V
       - cargo clippy --all-features --color=always
@@ -93,7 +95,7 @@ linux_install:
     stage: test
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -125,6 +127,8 @@ test-windows:
         - $env:Path += ";C:\GitLab-Runner\builds\${CI_PROJECT_NAMESPACE}\surfer\cargo\bin"
         - rustc -V
         - cargo -V
+        - choco install -y llvm
+        - $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
         - cargo test --color=always --locked -- --include-ignored
     interruptible: true
     allow_failure: true # Often causes timeouts, and the Windows binary is built after the Linux tests passes.
@@ -228,9 +232,8 @@ coverage:
         - rustc -V
         - cargo -V
         - shopt -s globstar
-        - >
-          cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always
-
+        - cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always --exclude surfer-vhpi-plugin --exclude surfer-vpi-plugin --exclude wasm_example_translator --workspace
+        # surfer-vhpi-plugin and surfer-vpi-plugin are excluded because they will fail to build due to missing VPI/VHPI headers.
     coverage: '/^\d+.\d+% coverage/'
     artifacts:
         reports:
@@ -249,7 +252,7 @@ pre-commit:
         - ${PRE_COMMIT_HOME}
     before_script:
         - apt update -y
-        - apt install python3 python3.13-venv ninja-build clang -y
+        - apt install python3 python3.13-venv ninja-build libclang-dev -y
         - python3 -m venv pc
         - source ./pc/bin/activate
         - python3 -m pip install pre-commit
@@ -286,12 +289,71 @@ typos-and-todos:
             fi
     interruptible: true
 
+test-hdl:
+  stage: test
+  image: rust:1-bookworm
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    HDL_PREFIX: "${CI_PROJECT_DIR}/.hdl-tools"
+  before_script:
+    - REPO_DIR="$CI_PROJECT_DIR"
+    - apt-get update
+    - apt-get install -y --no-install-recommends
+        git build-essential autoconf automake gperf bison flex
+        libreadline-dev pkg-config zlib1g-dev libdw-dev libffi-dev
+        libzstd-dev llvm-dev check curl jq ca-certificates libclang-dev
+
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib -name 'libclang.so*' | head -n1)")
+    - echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+    - IVERILOG_TAG=$(curl -s https://api.github.com/repos/steveicarus/iverilog/releases/latest | jq -r .tag_name)
+    - NVC_TAG=$(curl -s https://api.github.com/repos/nickg/nvc/releases/latest | jq -r .tag_name)
+
+    - |
+      if [ ! -x "$HDL_PREFIX/bin/iverilog" ] || [ "$(cat $HDL_PREFIX/.iverilog_tag 2>/dev/null)" != "$IVERILOG_TAG" ]; then
+        git clone --depth 1 --branch "$IVERILOG_TAG" https://github.com/steveicarus/iverilog.git /tmp/iverilog
+        cd /tmp/iverilog
+        sh autoconf.sh
+        ./configure --prefix="$HDL_PREFIX"
+        make -j"$(nproc)"
+        make install
+        echo "$IVERILOG_TAG" > "$HDL_PREFIX/.iverilog_tag"
+        cd "$REPO_DIR"
+      fi
+    - |
+      if [ ! -x "$HDL_PREFIX/bin/nvc" ] || [ "$(cat $HDL_PREFIX/.nvc_tag 2>/dev/null)" != "$NVC_TAG" ]; then
+        git clone --depth 1 --branch "$NVC_TAG" https://github.com/nickg/nvc.git /tmp/nvc
+        cd /tmp/nvc
+        ./autogen.sh
+        mkdir build && cd build
+        ../configure --prefix="$HDL_PREFIX"
+        make -j"$(nproc)"
+        make install
+        echo "$NVC_TAG" > "$HDL_PREFIX/.nvc_tag"
+        cd "$REPO_DIR"
+      fi
+
+    - export PATH="$HDL_PREFIX/bin:$PATH"
+    - nvc --version
+    - iverilog -V
+    # Build simulator plugins before starting the tests to avoid timouts caused by building the plugins during the tests.
+    - cargo build -p surfer-vpi-plugin -p surfer-vhpi-plugin --target-dir target/simulator-plugin-tests --locked
+    # Remove any existing VPI plugin to avoid conflicts with old versions
+    - rm -f surfer-vpi-plugin/verilog_examples/surfer_vpi_plugin.vpi
+  script:
+    - cd "$CI_PROJECT_DIR"
+    - export PATH="$HDL_PREFIX/bin:$PATH"
+    - cargo test tests::simulator --color=always --locked
+  cache:
+    key: hdl-tools-cache
+    paths:
+      - .hdl-tools/
+
 linux_build:
     stage: deploy
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -299,8 +361,10 @@ linux_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux.zip surfer surver
+        - zip ../surfer_linux.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux.zip
@@ -316,6 +380,8 @@ rocky_build:
         - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         - . "/builds/surfer-project/surfer/cargo/env"
         - dnf groupinstall -y 'Development Tools'
+        - dnf install -y clang clang-devel llvm-devel
+        - export LIBCLANG_PATH=/usr/lib64
         - git submodule update --init
         - mkdir dist
         - git fetch --tags
@@ -324,8 +390,10 @@ rocky_build:
         - cargo build --release --locked --features accesskit --timings --color always
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_rocky.zip surfer surver
+        - zip ../surfer_linux_rocky.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_rocky.zip
@@ -343,7 +411,7 @@ linux_arm64_build:
     needs: [test-linux-arm64]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -351,8 +419,10 @@ linux_arm64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_arm64.zip surfer surver
+        - zip ../surfer_linux_arm64.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_arm64.zip
@@ -367,7 +437,7 @@ windows_build:
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y mingw-w64 zip cmake
+        - apt-get install -y mingw-w64 zip cmake libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -376,8 +446,10 @@ windows_build:
         - mkdir dist
         - cp target/x86_64-pc-windows-gnu/release/surfer.exe dist/surfer.exe
         - cp target/x86_64-pc-windows-gnu/release/surver.exe dist/surver.exe
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vhpi_plugin.dll dist/surfer_vhpi_plugin.dll
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vpi_plugin.dll dist/surfer_vpi_plugin.dll
         - cd dist
-        - zip ../surfer_win.zip surfer.exe surver.exe
+        - zip ../surfer_win.zip surfer.exe surver.exe surfer_vhpi_plugin.dll surfer_vpi_plugin.dll
     artifacts:
         paths:
             - surfer_win.zip
@@ -408,8 +480,10 @@ macos-aarch64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.dylib dist/libsurfer_vhpi_plugin.dylib
+        - cp target/release/libsurfer_vpi_plugin.dylib dist/libsurfer_vpi_plugin.dylib
         - cd dist
-        - zip ../surfer_macos-aarch64.zip surfer surver
+        - zip ../surfer_macos-aarch64.zip surfer surver libsurfer_vhpi_plugin.dylib libsurfer_vpi_plugin.dylib
     artifacts:
         paths:
             - surfer_macos-aarch64.zip

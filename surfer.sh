@@ -31,7 +31,7 @@ if [ -n "$WSL_DISTRO_NAME" ]; then
             args+=("$STATE_FILE")
             ;;
          --wcp-initiate)
-            WCP_PORT=$(wslpath -w $2)
+            WCP_PORT=$2
             shift # past argument
             shift # past value
             args+=("--wcp-initiate")
@@ -45,9 +45,20 @@ if [ -n "$WSL_DISTRO_NAME" ]; then
             shift # past argument
             args+=("-V")
             ;;
+         --port)
+            SIM_PORT=$2
+            shift # past argument
+            shift # past value
+            args+=("--port")
+            args+=("$SIM_PORT")
+            ;;
          -*|--*)
             echo "surfer.sh: Unknown option $1"
             exit 1
+            ;;
+         sim)
+            shift # past argument
+            args+=("sim")
             ;;
          *)
             FILENAME=$(wslpath -w $1)

@@ -1,10 +1,14 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use ahash::AHashMap;
 use chrono::prelude::{DateTime, Utc};
 use eyre::{Result, bail};
 use num::BigUint;
 use serde::{Deserialize, Serialize};
+use surfer_simulator_protocol::SimulationStatus as ProtocolSimulationStatus;
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::VariableValue;
+use wellen::{Hierarchy, SignalRef};
 
 use crate::cxxrtl_container::CxxrtlContainer;
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,11 +24,32 @@ pub type VariableMeta = surfer_translation_types::VariableMeta<VarId, ScopeId>;
 /// Cache key for analog signal data: (`signal_id`, `translator_name`)
 pub type AnalogCacheKey = (SignalId, String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SimulationStatus {
     Paused,
     Running,
     Finished,
+}
+
+impl From<SimulationStatus> for ProtocolSimulationStatus {
+    fn from(status: SimulationStatus) -> Self {
+        match status {
+            SimulationStatus::Paused => ProtocolSimulationStatus::Paused,
+            SimulationStatus::Running => ProtocolSimulationStatus::Running,
+            SimulationStatus::Finished => ProtocolSimulationStatus::Done,
+        }
+    }
+}
+
+impl From<ProtocolSimulationStatus> for SimulationStatus {
+    fn from(status: ProtocolSimulationStatus) -> Self {
+        match status {
+            ProtocolSimulationStatus::Unspecified => SimulationStatus::Finished,
+            ProtocolSimulationStatus::Paused => SimulationStatus::Paused,
+            ProtocolSimulationStatus::Running => SimulationStatus::Running,
+            ProtocolSimulationStatus::Done => SimulationStatus::Finished,
+        }
+    }
 }
 
 pub struct MetaData {
@@ -308,20 +333,34 @@ pub enum WaveContainer {
 
 impl WaveContainer {
     #[must_use]
-    pub fn new_waveform(hierarchy: std::sync::Arc<wellen::Hierarchy>) -> Self {
-        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None)))
+    pub fn new_waveform(hierarchy: Arc<Hierarchy>) -> Self {
+        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None, None)))
+    }
+
+    #[must_use]
+    pub fn new_simulator_waveform(
+        hierarchy: Arc<Hierarchy>,
+        id_to_signal_ref: AHashMap<u32, SignalRef>,
+    ) -> Self {
+        WaveContainer::Wellen(Box::new(WellenContainer::new(
+            hierarchy,
+            None,
+            None,
+            Some(id_to_signal_ref),
+        )))
     }
 
     #[must_use]
     pub fn new_remote_waveform(
         server_url: &str,
-        hierarchy: std::sync::Arc<wellen::Hierarchy>,
+        hierarchy: Arc<Hierarchy>,
         file_index: usize,
     ) -> Self {
         WaveContainer::Wellen(Box::new(WellenContainer::new(
             hierarchy,
             Some(server_url.to_string()),
             Some(file_index),
+            None,
         )))
     }
 
@@ -653,16 +692,6 @@ impl WaveContainer {
     }
 
     #[must_use]
-    /// True if scope is a compound variable
-    pub fn scope_is_variable(&self, scope: &ScopeRef) -> bool {
-        match self {
-            WaveContainer::Wellen(f) => f.scope_is_variable(scope),
-            WaveContainer::Empty => false,
-            WaveContainer::Cxxrtl(_) => false, // TODO: Check if scope is variable
-        }
-    }
-
-    #[must_use]
     /// True if scope is an array
     pub fn scope_is_array(&self, scope: &ScopeRef) -> bool {
         match self {
@@ -701,9 +730,15 @@ impl WaveContainer {
     #[must_use]
     pub fn simulation_status(&self) -> Option<SimulationStatus> {
         match self {
-            WaveContainer::Wellen(_) => None,
+            WaveContainer::Wellen(f) => f.get_simulation_status(),
             WaveContainer::Empty => None,
             WaveContainer::Cxxrtl(c) => c.lock().unwrap().simulation_status(),
+        }
+    }
+
+    pub fn set_simulation_status(&mut self, status: SimulationStatus) {
+        if let WaveContainer::Wellen(inner) = self {
+            inner.set_simulation_status(status);
         }
     }
 
@@ -730,6 +765,20 @@ impl WaveContainer {
     pub fn wellen_add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
         match self {
             WaveContainer::Wellen(inner) => inner.add_body(body),
+            _ => {
+                bail!("Should never call this function on a non wellen container!");
+            }
+        }
+    }
+
+    /// Used to load values when simulator plugin sends new values
+    pub fn wellen_add_signals_from_simulation(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+        status: SimulationStatus,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        match self {
+            WaveContainer::Wellen(inner) => inner.add_signals_from_simulation(time_steps, status),
             _ => {
                 bail!("Should never call this function on a non wellen container!");
             }

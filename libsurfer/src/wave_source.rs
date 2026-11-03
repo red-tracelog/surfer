@@ -52,6 +52,7 @@ pub enum WaveSource {
     DragAndDrop(Option<Utf8PathBuf>),
     Url(String),
     Cxxrtl(CxxrtlKind),
+    SimulatorPlugin,
 }
 
 pub const STATE_FILE_EXTENSION: &str = "surf.ron";
@@ -106,6 +107,7 @@ impl WaveSource {
             }
             WaveSource::Url(u) => Ws::Url(u.clone()),
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
+            WaveSource::SimulatorPlugin => Ws::Simulator("External simulator".to_string()),
         }
     }
 
@@ -125,6 +127,7 @@ impl WaveSource {
                 .and_then(|u| u.rsplit('/').next())
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string),
+            WaveSource::SimulatorPlugin => None,
             WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
         }
     }
@@ -135,6 +138,13 @@ impl WaveSource {
     #[must_use]
     pub fn window_title(&self) -> String {
         format_window_title(self.title_name().as_deref())
+    }
+
+    pub(crate) fn can_reload(&self) -> bool {
+        matches!(
+            self,
+            WaveSource::File(_) | WaveSource::Data | WaveSource::Url(_)
+        )
     }
 }
 
@@ -189,6 +199,7 @@ impl Display for WaveSource {
             WaveSource::Url(url) => write!(f, "{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Tcp { url }) => write!(f, "cxxrtl+tcp://{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Mailbox) => write!(f, "cxxrtl mailbox"),
+            WaveSource::SimulatorPlugin => write!(f, "External simulator"),
         }
     }
 }
@@ -200,6 +211,7 @@ pub enum WaveFormat {
     Ghw,
     CxxRtl,
     Ftr,
+    Simulation,
 }
 
 impl Display for WaveFormat {
@@ -210,6 +222,7 @@ impl Display for WaveFormat {
             WaveFormat::Ghw => write!(f, "GHW"),
             WaveFormat::CxxRtl => write!(f, "CXXRTL"),
             WaveFormat::Ftr => write!(f, "FTR"),
+            WaveFormat::Simulation => write!(f, "SIMULATION"),
         }
     }
 }
@@ -252,6 +265,7 @@ pub enum LoadProgressStatus {
     ReadingHeader(WaveSource),
     ReadingBody(WaveSource, u64, Arc<AtomicU64>),
     LoadingVariables(u64),
+    Simulating,
 }
 
 impl SystemState {
@@ -565,7 +579,7 @@ impl SystemState {
                 ),
             ),
             Err(e) => error!("{e:?}"),
-        };
+        }
         Ok(())
     }
     pub fn load_transactions_from_bytes(
@@ -591,7 +605,7 @@ impl SystemState {
                 ),
             ),
             Err(e) => error!("{e:?}"),
-        };
+        }
     }
 
     /// uses the server status in order to display a loading bar
@@ -659,7 +673,7 @@ impl SystemState {
                     ),
                 ),
                 Err(e) => error!("{e:?}"),
-            };
+            }
         };
         #[cfg(not(target_arch = "wasm32"))]
         futures::executor::block_on(task);
@@ -748,7 +762,7 @@ impl SystemState {
                 };
                 checked_send(
                     &sender,
-                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body)),
+                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body), None),
                 );
             };
             if let Some(pool) = pool {
@@ -852,6 +866,10 @@ pub fn draw_progress_information(ui: &mut egui::Ui, progress_data: &LoadProgress
         LoadProgressStatus::LoadingVariables(num) => {
             ui.spinner();
             ui.monospace(format!("Loading {num} variables"));
+        }
+        LoadProgressStatus::Simulating => {
+            ui.spinner();
+            ui.monospace("Running simulation");
         }
         LoadProgressStatus::ReadingBody(source, total, bytes_done) => {
             let num_bytes = bytes_done.load(std::sync::atomic::Ordering::SeqCst);

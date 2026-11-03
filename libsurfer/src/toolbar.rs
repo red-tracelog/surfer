@@ -5,15 +5,14 @@ use emath::{Align, Vec2};
 
 use std::collections::HashSet;
 
-use crate::message::MessageTarget;
-use crate::mousegestures::AnnotationKind;
-use crate::wave_container::SimulationStatus;
-use crate::wave_source::LoadOptions;
 use crate::{
     SystemState,
     file_dialog::OpenMode,
-    message::Message,
+    message::{Message, MessageTarget},
+    mousegestures::AnnotationKind,
+    wave_container::{SimulationStatus, WaveContainer},
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
+    wave_source::LoadOptions,
 };
 
 pub(crate) const TOOLBAR_TIME_ID: &str = "toolbar-time";
@@ -24,7 +23,7 @@ pub(crate) struct ToolbarGroupSpec {
     pub label: &'static str,
 }
 
-const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
+const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 13] = [
     ToolbarGroupSpec {
         id: "menu",
         label: "Menu",
@@ -72,6 +71,10 @@ const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
     ToolbarGroupSpec {
         id: "annotations",
         label: "Annotations",
+    },
+    ToolbarGroupSpec {
+        id: "simulation",
+        label: "Simulation",
     },
 ];
 
@@ -168,13 +171,13 @@ impl SystemState {
         if !self.show_menu() {
             visible.insert("menu");
         }
-        if self
-            .user
-            .waves
-            .as_ref()
-            .and_then(|waves| waves.inner.simulation_status())
-            .is_some()
-        {
+        if self.is_simulation() {
+            visible.insert("simulation");
+        }
+        if self.user.waves.as_ref().is_some_and(|waves| {
+            waves.inner.simulation_status().is_some()
+                && matches!(waves.inner.as_waves(), Some(WaveContainer::Cxxrtl(_)))
+        }) {
             visible.insert("cxxrtl");
         }
         if self.user.waves.is_some() {
@@ -308,9 +311,10 @@ impl SystemState {
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
                     "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
-                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_cxxrtl(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
+                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
                     }
@@ -644,7 +648,7 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_simulation(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+    fn draw_toolbar_group_cxxrtl(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         let Some(waves) = &self.user.waves else {
             return;
         };
@@ -652,7 +656,7 @@ impl SystemState {
             return;
         };
 
-        ui.label("Simulation");
+        ui.label("CXXRTL");
         match status {
             SimulationStatus::Paused => add_toolbar_button(
                 ui,
@@ -990,5 +994,46 @@ impl SystemState {
                 self.clear_toolbar_drag_state();
             }
         }
+    }
+
+    fn draw_toolbar_group_simulation(
+        &self,
+        ui: &mut Ui,
+        msgs: &mut Vec<Message>,
+        wave_loaded: bool,
+    ) {
+        ui.separator();
+
+        let simulation_paused = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.simulation_status())
+            .is_some_and(|status| status == SimulationStatus::Paused);
+        let enabled = simulation_paused && wave_loaded;
+
+        let converted_time = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs, enabled));
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::PLAY_FILL,
+            "Run simulation for given time",
+            Message::SimulatorPluginRunFor(converted_time),
+            enabled,
+        );
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::FORWARD_END_FILL,
+            "Run full simulation",
+            Message::SimulatorPluginRunFor(None),
+            enabled,
+        );
     }
 }

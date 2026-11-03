@@ -145,11 +145,21 @@ impl SystemState {
                                 let record = filtered[row.index()];
                                 row.col(|ui| {
                                     let (color, text) = match record.level {
-                                        Level::ERROR => (Color32::RED, "Error"),
-                                        Level::WARN => (Color32::YELLOW, "Warn"),
-                                        Level::INFO => (Color32::GREEN, "Info"),
-                                        Level::DEBUG => (Color32::BLUE, "Debug"),
-                                        Level::TRACE => (Color32::GRAY, "Trace"),
+                                        Level::ERROR => {
+                                            (self.user.config.theme.log_colors.error, "Error")
+                                        }
+                                        Level::WARN => {
+                                            (self.user.config.theme.log_colors.warn, "Warn")
+                                        }
+                                        Level::INFO => {
+                                            (self.user.config.theme.log_colors.info, "Info")
+                                        }
+                                        Level::DEBUG => {
+                                            (self.user.config.theme.log_colors.debug, "Debug")
+                                        }
+                                        Level::TRACE => {
+                                            (self.user.config.theme.log_colors.trace, "Trace")
+                                        }
                                     };
 
                                     ui.colored_label(color, text);

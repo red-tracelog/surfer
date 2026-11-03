@@ -1,0 +1,391 @@
+syntax = "proto3";
+
+package surfer.simulator.protocol.v1;
+
+// Every TCP frame contains this envelope, NOT a directional message.
+// Concatenate data from consecutive chunks until last=true, then decode the
+// result as SimulatorToSurfer or SurferToSimulator. Never interleave messages.
+// Each encoded envelope is at most 65535 bytes, excluding the two-byte
+// unsigned big-endian TCP length prefix.
+message TransportChunk {
+  bytes data = 1;
+  bool last = 2;
+  uint32 protocol_version = 3;
+}
+
+// Empty marker message used for oneof variants without payload.
+message Empty {}
+
+// Envelope for messages sent by the simulator to Surfer.
+message SimulatorToSurfer {
+  // Exactly one simulator->surfer message payload.
+  oneof kind {
+    // Basic simulator metadata.
+    SimulatorInfo simulator_info = 1;
+    // Full hierarchy and simulation time scale.
+    Hierarchy hierarchy = 2;
+    // Acknowledgement for command-like messages.
+    Acknowledge acknowledge = 3;
+    // Value changes grouped by timesteps with a completion state.
+    ValueChanges value_changes = 4;
+    // Current simulation time in simulation time units.
+    CurrentSimulationTime current_simulation_time = 5;
+  }
+}
+
+// Envelope for messages sent by Surfer to the simulator.
+message SurferToSimulator {
+  // Exactly one surfer->simulator message payload.
+  oneof kind {
+    // Request simulator metadata.
+    Empty request_simulator_info = 1;
+    // Start or continue simulation.
+    RunSimulation run_simulation = 2;
+    // Pause simulation.
+    Empty pause_simulation = 3;
+    // Request hierarchy and time scale.
+    Empty request_hierarchy = 4;
+    // Start reporting value changes for the variable identified by hierarchy id.
+    TrackVariableChanges track_variable_changes = 5;
+    // Stop reporting value changes for the variable identified by hierarchy id.
+    UntrackVariableChanges untrack_variable_changes = 6;
+    // Shutdown simulator and close connection.
+    Empty shutdown = 7;
+  }
+}
+
+// Basic simulator metadata.
+message SimulatorInfo {
+  // Protocol version implemented by the simulator/plugin.
+  uint32 protocol_version = 1;
+  // Simulator name.
+  string name = 2;
+  // Simulator version.
+  string version = 3;
+}
+
+// Full hierarchy and simulation time scale.
+message Hierarchy {
+  // Hierarchy stream interpreted as push/pop/add operations.
+  repeated HierarchyElement hierarchy = 1;
+  // Decimal exponent of the simulator timestamp unit (for example, -3 is ms).
+  optional int32 exponent = 2;
+}
+
+// Generic acknowledgement for command-like messages.
+message Acknowledge {
+  // True indicates success, false indicates failure.
+  bool success = 1;
+  // Optional error details to be logged by Surfer.
+  optional string error = 2;
+}
+
+// Value changes grouped by timestamps and status.
+message ValueChanges {
+  // All recorded value changes grouped by timestep.
+  repeated TimeStep time_steps = 1;
+  // Whether the simulation is done, paused, or still running.
+  SimulationStatus status = 2;
+}
+
+// Current simulation time in simulation time units.
+//
+// This is used to update the user interface. It is recommended to send this
+// periodically based on wall time (for example every ~500ms), rather than
+// on every simulation time change, to avoid overwhelming the UI.
+message CurrentSimulationTime {
+  // Current simulation time in simulator ticks.
+  uint64 time = 1;
+}
+
+// Start or continue simulation.
+//
+// An absent time limit means run until completion. All values are simulator ticks.
+// A zero relative duration or an absolute deadline equal to the current time
+// pauses at the end of the current timestep. Past or unsupported deadlines are
+// rejected with an unsuccessful acknowledgement.
+message RunSimulation {
+  oneof time {
+    // Amount of simulation time to advance.
+    uint64 relative = 1;
+    // Absolute simulation timestamp to stop at.
+    uint64 absolute = 2;
+  }
+}
+
+// Start reporting value changes for shared signal IDs (idempotent).
+message TrackVariableChanges {
+  // Shared signal IDs from the hierarchy; aliases need only one subscription.
+  repeated uint32 ids = 1;
+}
+
+// Stop reporting value changes for shared signal IDs.
+// The client must retain a subscription while any alias still needs its values.
+message UntrackVariableChanges {
+  // Shared signal IDs from the hierarchy.
+  repeated uint32 ids = 1;
+}
+
+// One hierarchy operation.
+//
+// The hierarchy stream is interpreted sequentially and should form a balanced
+// push/pop scope structure.
+//
+// How to produce a valid stream:
+// 1. Emit PushScope when entering a scope.
+// 2. Emit AddVar for variables in that scope.
+// 3. Recurse into child scopes.
+// 4. Emit PopScope when leaving the scope.
+//
+// Practical rules:
+// - Every PushScope must have exactly one later matching PopScope.
+// - AddVar applies to the current top-of-stack scope.
+// - Do not emit PopScope when no scope is active.
+// - At end-of-stream, all opened scopes must be closed.
+message HierarchyElement {
+  // Exactly one hierarchy operation payload.
+  oneof kind {
+    // Enter a new scope.
+    PushScope push_scope = 1;
+    // Exit the current scope.
+    Empty pop_scope = 2;
+    // Declare a variable in the current scope.
+    AddVar add_var = 3;
+  }
+}
+
+// Enter a new scope.
+message PushScope {
+  // Scope name as it should appear in Surfer.
+  string name = 1;
+  // Scope kind (module, architecture, block, ...).
+  ScopeType scope_type = 2;
+}
+
+// Declare a variable in the current scope.
+message AddVar {
+  // Value stream ID used in tracking and value change messages. Multiple
+  // declarations may share an ID, with different names and scopes. Such aliases
+  // must use the same signal encoding (including width). Values are sent once.
+  uint32 id = 1;
+  // Variable name.
+  string name = 2;
+  // Optional index for arrays or multi-dimensional variables.
+  VarIndex index = 3;
+  // Type name for display/translation.
+  string type_name = 4;
+  // Variable category.
+  VarType var_type = 5;
+  // Value encoding (VCD-compatible).
+  SignalEncoding signal_encoding = 6;
+  // Optional direction metadata.
+  optional VarDirection var_direction = 7;
+  // Optional enum mapping from option names to display values.
+  //
+  // Used for VHDL enumerated types and SystemVerilog enums.
+  optional EnumMap enum_map = 8;
+  // Whether this variable is a parameter or generic.
+  bool is_parameter = 9;
+}
+
+// Enum display mapping.
+message EnumMap {
+  repeated EnumMapEntry entries = 1;
+}
+
+// Key/value entry for enum display mapping.
+message EnumMapEntry {
+  // Enum option name.
+  string key = 1;
+  // Display value.
+  string value = 2;
+}
+
+// Array or vector index for a variable.
+message VarIndex {
+  // Most-significant index bound.
+  int64 msb = 1;
+  // Least-significant index bound.
+  int64 lsb = 2;
+}
+
+// Underlying signal encoding.
+message SignalEncoding {
+  // Exactly one encoding representation.
+  oneof kind {
+    // Value encoded as string-like data.
+    Empty string = 1;
+    // Value encoded as a real number.
+    Empty real = 2;
+    // Value encoded as a fixed-width bit vector.
+    uint32 bit_vector = 3;
+  }
+}
+
+// All recorded value changes at a certain timestep.
+message TimeStep {
+  // Timestamp in simulation time units.
+  uint64 timestamp = 1;
+  // Signal changes observed at this timestamp.
+  repeated SignalChange changes = 2;
+}
+
+// A change for a single value.
+message SignalChange {
+  // Shared signal ID from hierarchy. Emit each signal event only once,
+  // regardless of the number of declarations referring to this ID.
+  uint32 id = 1;
+  // Encoded value payload.
+  SignalValue value = 2;
+}
+
+// Encoded value payload.
+message SignalValue {
+  // Exactly one value encoding representation.
+  oneof kind {
+    // Value encoded as it appears in VCD, without timestamp or variable id.
+    bytes vcd_value = 1;
+  }
+}
+
+// State indicating whether more value changes are expected.
+enum SimulationStatus {
+  // Unspecified/invalid value.
+  SIMULATION_STATUS_UNSPECIFIED = 0;
+  // Simulation is finished and no more value changes will be sent.
+  SIMULATION_STATUS_DONE = 1;
+  // Simulation is paused and no more value changes will be sent until resumed.
+  SIMULATION_STATUS_PAUSED = 2;
+  // Simulation is still running and more value changes will be sent.
+  SIMULATION_STATUS_RUNNING = 3;
+}
+
+// Scope kinds for hierarchy elements.
+enum ScopeType {
+  // Unspecified value.
+  SCOPE_TYPE_UNSPECIFIED = 0;
+  // Verilog/SystemVerilog module scope.
+  SCOPE_TYPE_MODULE = 1;
+  // Verilog/SystemVerilog task scope.
+  SCOPE_TYPE_TASK = 2;
+  // Verilog/SystemVerilog function scope.
+  SCOPE_TYPE_FUNCTION = 3;
+  // Verilog begin/end block scope.
+  SCOPE_TYPE_BEGIN = 4;
+  // Verilog fork/join block scope.
+  SCOPE_TYPE_FORK = 5;
+  // Verilog/SystemVerilog generate scope.
+  SCOPE_TYPE_GENERATE = 6;
+  // SystemVerilog struct type scope.
+  SCOPE_TYPE_STRUCT = 7;
+  // SystemVerilog union type scope.
+  SCOPE_TYPE_UNION = 8;
+  // SystemVerilog class scope.
+  SCOPE_TYPE_CLASS = 9;
+  // SystemVerilog interface scope.
+  SCOPE_TYPE_INTERFACE = 10;
+  // Package scope (Verilog/SystemVerilog).
+  SCOPE_TYPE_PACKAGE = 11;
+  // SystemVerilog program block scope.
+  SCOPE_TYPE_PROGRAM = 12;
+  // VHDL architecture scope.
+  SCOPE_TYPE_VHDL_ARCHITECTURE = 13;
+  // VHDL procedure scope.
+  SCOPE_TYPE_VHDL_PROCEDURE = 14;
+  // VHDL function scope.
+  SCOPE_TYPE_VHDL_FUNCTION = 15;
+  // VHDL record type scope.
+  SCOPE_TYPE_VHDL_RECORD = 16;
+  // VHDL process scope.
+  SCOPE_TYPE_VHDL_PROCESS = 17;
+  // VHDL block scope.
+  SCOPE_TYPE_VHDL_BLOCK = 18;
+  // VHDL for-generate scope.
+  SCOPE_TYPE_VHDL_FOR_GENERATE = 19;
+  // VHDL if-generate scope.
+  SCOPE_TYPE_VHDL_IF_GENERATE = 20;
+  // Generic/other VHDL generate scope.
+  SCOPE_TYPE_VHDL_GENERATE = 21;
+  // VHDL package scope.
+  SCOPE_TYPE_VHDL_PACKAGE = 22;
+  // Generic scope used by GHW when no specific kind is available.
+  SCOPE_TYPE_GHW_GENERIC = 23;
+  // VHDL array type scope.
+  SCOPE_TYPE_VHDL_ARRAY = 24;
+  // Scope kind is known to be unsupported/unknown.
+  SCOPE_TYPE_UNKNOWN = 25;
+  // SystemVerilog clocking block scope.
+  SCOPE_TYPE_CLOCKING = 26;
+  // SystemVerilog array scope.
+  SCOPE_TYPE_SV_ARRAY = 27;
+}
+
+// Variable categories.
+enum VarType {
+  // Unspecified value.
+  VAR_TYPE_UNSPECIFIED = 0;
+  // Event variable.
+  VAR_TYPE_EVENT = 1;
+  // Integer variable.
+  VAR_TYPE_INTEGER = 2;
+  // Real-valued variable.
+  VAR_TYPE_REAL = 3;
+  // Verilog reg variable.
+  VAR_TYPE_REG = 4;
+  // Time-typed variable.
+  VAR_TYPE_TIME = 5;
+  // Wire/net variable.
+  VAR_TYPE_WIRE = 6;
+  // String variable.
+  VAR_TYPE_STRING = 7;
+  // Port declaration/handle.
+  VAR_TYPE_PORT = 8;
+  // SystemVerilog bit variable.
+  VAR_TYPE_BIT = 9;
+  // SystemVerilog logic variable.
+  VAR_TYPE_LOGIC = 10;
+  // SystemVerilog int variable.
+  VAR_TYPE_INT = 11;
+  // SystemVerilog shortint variable.
+  VAR_TYPE_SHORT_INT = 12;
+  // SystemVerilog longint variable.
+  VAR_TYPE_LONG_INT = 13;
+  // SystemVerilog byte variable.
+  VAR_TYPE_BYTE = 14;
+  // Enumerated variable.
+  VAR_TYPE_ENUM = 15;
+  // SystemVerilog shortreal variable.
+  VAR_TYPE_SHORT_REAL = 16;
+  // Boolean variable.
+  VAR_TYPE_BOOLEAN = 17;
+  // Generic bit-vector variable.
+  VAR_TYPE_BIT_VECTOR = 18;
+  // VHDL std_logic variable.
+  VAR_TYPE_STD_LOGIC = 19;
+  // VHDL std_logic_vector variable.
+  VAR_TYPE_STD_LOGIC_VECTOR = 20;
+  // VHDL std_ulogic variable.
+  VAR_TYPE_STD_U_LOGIC = 21;
+  // VHDL std_ulogic_vector variable.
+  VAR_TYPE_STD_U_LOGIC_VECTOR = 22;
+}
+
+// Optional variable direction metadata.
+enum VarDirection {
+  // Unspecified value.
+  VAR_DIRECTION_UNSPECIFIED = 0;
+  // Direction is present but unknown to the producer.
+  VAR_DIRECTION_UNKNOWN = 1;
+  // Direction is implicit/inferred rather than explicitly declared.
+  VAR_DIRECTION_IMPLICIT = 2;
+  // Input direction.
+  VAR_DIRECTION_INPUT = 3;
+  // Output direction.
+  VAR_DIRECTION_OUTPUT = 4;
+  // Bidirectional inout direction.
+  VAR_DIRECTION_IN_OUT = 5;
+  // VHDL buffer direction.
+  VAR_DIRECTION_BUFFER = 6;
+  // VHDL linkage direction.
+  VAR_DIRECTION_LINKAGE = 7;
+}

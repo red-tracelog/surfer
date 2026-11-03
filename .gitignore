@@ -4,9 +4,13 @@
 /target
 /surfer/dist
 trunk
+/surfer-sim-test-*
+work
+/tools/__pycache__
 
-snapshots/*.diff.png
+snapshots/**/*.diff.png
 *.profraw
+*.vvp
 
 *~
 \#*\#

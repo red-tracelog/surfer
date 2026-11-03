@@ -99,7 +99,6 @@ impl eframe::App for SystemState {
         });
         #[cfg(target_arch = "wasm32")]
         let _ = fullscreen;
-
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("draw");
         let mut msgs = self.draw(ui, window_size);
@@ -108,7 +107,8 @@ impl eframe::App for SystemState {
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("push_async_messages");
-        self.push_async_messages(&mut msgs);
+        let mut plugin_msgs: Vec<Message> = Vec::new();
+        self.push_async_messages(&mut plugin_msgs, &mut msgs);
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("push_async_messages");
 
@@ -119,6 +119,12 @@ impl eframe::App for SystemState {
             ui.set_zoom_factor(ui_zoom_factor);
         }
 
+        // Process plugin messages in FIFO order
+        for msg in plugin_msgs {
+            self.update(msg);
+        }
+
+        // Process regular messages in LIFO order (pop from end)
         while let Some(msg) = msgs.pop() {
             #[cfg(not(target_arch = "wasm32"))]
             if let Message::Exit = msg {
@@ -279,6 +285,11 @@ impl SystemState {
 
         if self.user.show_url_entry {
             self.draw_load_url(ui, &mut msgs);
+        }
+
+        if self.show_connect_to_simulator_dialog {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_connect_to_simulator_dialog(ui, &mut msgs);
         }
 
         if self.user.show_server_file_window {
@@ -562,7 +573,10 @@ impl SystemState {
         {
             self.handle_pressed_keys(ui, &mut msgs);
         }
-
+        if self.simulation_running() {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_simulation_running(ui, &mut msgs);
+        }
         msgs
     }
 
@@ -1099,6 +1113,8 @@ impl SystemState {
 
                     row_ui.add_space(10.0 * f32::from(info.node.level));
                     if any_groups {
+                        // The icon and label already have padding of their own.
+                        row_ui.spacing_mut().item_spacing.x = 0.0;
                         let response = self.hierarchy_icon(
                             row_ui,
                             info.has_children,

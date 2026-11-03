@@ -41,6 +41,14 @@ pub enum TrueName {
         after: String,
     },
 }
+#[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]
+#[cfg_attr(feature = "wasm_plugins", encoding(Json))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum VariableVisibility {
+    #[default]
+    Visible,
+    Hidden,
+}
 
 /// Provides a way for translators to "change" the name of variables in the variable list.
 /// Most translators should not produce `VariableNameInfo` since it is a global thing that
@@ -60,7 +68,7 @@ pub struct VariableNameInfo {
     /// can produce a better name than the raw name.
     pub true_name: Option<TrueName>,
     /// Translators can change the order that signals appear in the variable list using this
-    /// parameter. Before rendering, the variable will be sported by this number in descending
+    /// parameter. Before rendering, the variable will be sorted by this number in descending
     /// order, so variables that are predicted to be extra important to the
     /// user should have a number > 0 while unimportant variables should be < 0
     ///
@@ -68,6 +76,13 @@ pub struct VariableNameInfo {
     /// For example, an HDL translator that does not recognise a name should leave it at None
     /// to give other translators the chance to set the priority
     pub priority: Option<i32>,
+    /// Translators can hide a variable when they decide its not relevant to the end user. Hidden
+    /// variables are not exposed to the user.
+    ///
+    /// Translators must be very careful when choosing which variables to hide, as the user may not
+    /// ever know they are hidden in the first place.
+    #[serde(default)]
+    pub visibility: VariableVisibility,
 }
 
 #[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]

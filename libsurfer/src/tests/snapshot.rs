@@ -3113,6 +3113,38 @@ snapshot_ui_with_file_and_msgs! {wasm_translator_works, "examples/picorv32.vcd",
     Message::CursorSet(BigInt::from(5000000))
 ]}
 
+#[cfg(feature = "wasm_plugins")]
+snapshot_ui_with_file_and_msgs! {wasm_translator_hidden_vars, "examples/picorv32.vcd", [
+    Message::SetSidePanelVisible(true),
+    Message::SetVariableShowHiddenVariables(false),
+    Message::LoadWasmTranslator(
+        get_project_root()
+            .unwrap()
+            .join("examples").join("wasm_example_translator.wasm")
+            .try_into()
+            .unwrap()
+    ),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.top.uut.pcpi_insn")]),
+    Message::AddScope(ScopeRef::from_hierarchy_string("testbench"), false),
+    Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_hierarchy_string("testbench")))),
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(1),
+            field: vec![],
+        }),
+        String::from("Wasm Example Translator"),
+    ),
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(1),
+            field: vec!["[6]".to_string()],
+        }),
+        String::from("Binary"),
+    ),
+    Message::ExpandDrawnItem { item: DisplayedItemRef(1), levels: 1 },
+    Message::CursorSet(BigInt::from(5000000))
+]}
+
 snapshot_ui_with_file_and_msgs! {analog_waveform_with_4state, "examples/analog.vcd", [
     Message::SelectTheme(Some("light+".to_string())),
     Message::AddVariables(vec![

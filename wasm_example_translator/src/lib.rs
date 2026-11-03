@@ -3,7 +3,7 @@ pub use surfer_translation_types::plugin_types::TranslateParams;
 use surfer_translation_types::{
     SubFieldTranslationResult, TranslationPreference, TranslationResult, ValueKind, VariableInfo,
     VariableMeta, VariableValue,
-    translator::{TrueName, VariableNameInfo},
+    translator::{TrueName, VariableNameInfo, VariableVisibility},
 };
 
 #[plugin_fn]
@@ -66,8 +66,12 @@ pub fn variable_info(variable: VariableMeta<(), ()>) -> FnResult<VariableInfo> {
 }
 
 #[plugin_fn]
-pub fn translates(_variable: VariableMeta<(), ()>) -> FnResult<TranslationPreference> {
-    Ok(TranslationPreference::Yes)
+pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPreference> {
+    if variable.var.name == "trap" {
+        Ok(TranslationPreference::Prefer)
+    } else {
+        Ok(TranslationPreference::Yes)
+    }
 }
 
 #[plugin_fn]
@@ -83,6 +87,7 @@ pub fn variable_name_info(
                 after: "ef".to_string(),
             }),
             priority: Some(2),
+            visibility: VariableVisibility::Visible,
         }),
         "trace_file" => Some(VariableNameInfo {
             true_name: Some(TrueName::SourceCode {
@@ -92,6 +97,7 @@ pub fn variable_name_info(
                 after: "a".to_string(),
             }),
             priority: Some(0),
+            visibility: VariableVisibility::Visible,
         }),
         "trace_valid" => Some(VariableNameInfo {
             true_name: Some(TrueName::SourceCode {
@@ -101,6 +107,7 @@ pub fn variable_name_info(
                 after: "this is a very long end of line".to_string(),
             }),
             priority: Some(0),
+            visibility: VariableVisibility::Visible,
         }),
         "resetn" => Some(VariableNameInfo {
             true_name: Some(TrueName::SourceCode {
@@ -110,6 +117,7 @@ pub fn variable_name_info(
                 after: "this is a very long end of line".to_string(),
             }),
             priority: Some(-1),
+            visibility: VariableVisibility::Visible,
         }),
         "clk" => Some(VariableNameInfo {
             true_name: Some(TrueName::SourceCode {
@@ -119,6 +127,12 @@ pub fn variable_name_info(
                 after: "this is a very long end of line".to_string(),
             }),
             priority: Some(0),
+            visibility: VariableVisibility::Visible,
+        }),
+        "hidden" => Some(VariableNameInfo {
+            true_name: None,
+            priority: Some(-1),
+            visibility: VariableVisibility::Hidden,
         }),
         _ => None,
     };

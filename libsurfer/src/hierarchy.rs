@@ -29,7 +29,7 @@ use num::BigUint;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use std::rc::Rc;
-use surfer_translation_types::translator::VariableNameInfo;
+use surfer_translation_types::translator::{VariableNameInfo, VariableVisibility};
 use tracing::warn;
 #[derive(Clone, Copy, Debug, Deserialize, Display, FromStr, PartialEq, Eq, Serialize, Sequence)]
 pub enum HierarchyStyle {
@@ -77,6 +77,7 @@ pub(crate) struct AllVariableCacheKey {
     include_inouts: bool,
     include_others: bool,
     group_by_direction: bool,
+    show_hidden_vars: bool,
 }
 
 impl SystemState {
@@ -350,6 +351,7 @@ impl SystemState {
             include_inouts: f.include_inouts,
             include_others: f.include_others,
             group_by_direction: f.group_by_direction,
+            show_hidden_vars: f.show_hidden_vars,
         }
     }
 
@@ -733,14 +735,23 @@ impl SystemState {
     ) -> Vec<VariableListRow> {
         let mut rows = variables
             .iter()
-            .map(|var| {
+            .filter_map(|var| {
                 let meta = wave_container.variable_meta(var).ok();
                 let name_info = self.get_variable_name_info(var, meta.as_ref());
-                VariableListRow {
+
+                if let Some(info) = name_info.as_ref() {
+                    if !self.user.variable_filter.show_hidden_vars
+                        && info.visibility == VariableVisibility::Hidden
+                    {
+                        return None;
+                    }
+                }
+
+                Some(VariableListRow {
                     variable: var.clone(),
                     meta,
                     name_info,
-                }
+                })
             })
             .collect::<Vec<_>>();
 

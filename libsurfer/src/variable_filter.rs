@@ -50,6 +50,7 @@ pub struct VariableFilter {
     pub(crate) include_others: bool,
 
     pub(crate) group_by_direction: bool,
+    pub(crate) show_hidden_vars: bool,
     #[serde(skip)]
     cache: RefCell<VariableFilterRegexCache>,
 }
@@ -92,6 +93,7 @@ impl VariableFilter {
             include_others: true,
 
             group_by_direction: false,
+            show_hidden_vars: true,
             cache: RefCell::new(Default::default()),
         }
     }
@@ -394,12 +396,13 @@ impl SystemState {
     }
 
     fn variable_filter_type_menu(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
-        // Checkbox wants a mutable bool reference but we don't have mutable self to give it a
-        // mutable 'group_by_direction' directly. Plus we want to update things via a message. So
-        // make a copy of the flag here that can be mutable and just ensure we update the actual
-        // flag on a click.
+        // Checkbox wants mutable bool references but we don't have mutable self to provide them.
+        // Plus we want to update things via a message. So make a copy of the flags here that can
+        // be mutable and just ensure we update the actual flag on a click.
         let mut name_filter_case_insensitive =
             self.user.variable_filter.name_filter_case_insensitive;
+        let mut group_by_direction = self.user.variable_filter.group_by_direction;
+        let mut show_hidden_vars = self.user.variable_filter.show_hidden_vars;
 
         if ui
             .checkbox(&mut name_filter_case_insensitive, "Case insensitive")
@@ -426,18 +429,21 @@ impl SystemState {
 
         ui.separator();
 
-        // Checkbox wants a mutable bool reference but we don't have mutable self to give it a
-        // mutable 'group_by_direction' directly. Plus we want to update things via a message. So
-        // make a copy of the flag here that can be mutable and just ensure we update the actual
-        // flag on a click.
-        let mut group_by_direction = self.user.variable_filter.group_by_direction;
-
         if ui
             .checkbox(&mut group_by_direction, "Group by direction")
             .clicked()
         {
             msgs.push(Message::SetVariableGroupByDirection(
                 !self.user.variable_filter.group_by_direction,
+            ));
+        }
+
+        if ui
+            .checkbox(&mut show_hidden_vars, "Show hidden variables")
+            .clicked()
+        {
+            msgs.push(Message::SetVariableShowHiddenVariables(
+                !self.user.variable_filter.show_hidden_vars,
             ));
         }
 
@@ -854,5 +860,6 @@ mod tests {
         assert!(filter.include_others);
 
         assert!(!filter.group_by_direction);
+        assert!(filter.show_hidden_vars);
     }
 }

@@ -1,0 +1,21 @@
+$version Generated manually $end
+$timescale 1ns $end
+ $scope module top $end
+  $var wire 10 # mask [9:0] $end
+ $upscope $end
+$enddefinitions $end
+#0
+b0000000000 #
+#10
+b0000001001 #
+#20
+b1000000001 #
+#30
+b0100100100 #
+#40
+b00x0010010 #
+#50
+b1111111111 #
+#60
+b0000000000 #
+#70

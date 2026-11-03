@@ -3904,3 +3904,12 @@ fn theme_menu_radio_button() {
 
     compare_with_snapshot(&Utf8PathBuf::from("theme_menu_radio_button"), &new);
 }
+
+snapshot_ui_with_file_and_msgs! {set_bit_indices_translator, "examples/bit_indices.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.mask"),
+        VariableRef::from_hierarchy_string("top.mask"),
+    ]),
+    Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Binary")),
+    Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Set bit indices")),
+]}

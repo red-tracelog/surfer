@@ -399,6 +399,7 @@ pub fn all_translators() -> TranslatorList {
         Arc::new(E5M2Translator {}),
         Arc::new(E4M3Translator {}),
         Arc::new(NumberOfOnesTranslator {}),
+        Arc::new(SetBitIndicesTranslator {}),
         Arc::new(LeadingOnesTranslator {}),
         Arc::new(TrailingOnesTranslator {}),
         Arc::new(LeadingZerosTranslator {}),

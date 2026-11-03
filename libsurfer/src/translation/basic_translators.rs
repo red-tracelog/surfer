@@ -331,6 +331,39 @@ impl BasicTranslator<VarId, ScopeId> for NumberOfOnesTranslator {
     }
 }
 
+/// Lists the indices of all bits that are set, e.g. `0b1001` is shown as `{0,3}`.
+/// Useful for wide one-hot/bitmask buses where the binary representation is unwieldy.
+pub struct SetBitIndicesTranslator {}
+
+impl BasicTranslator<VarId, ScopeId> for SetBitIndicesTranslator {
+    fn name(&self) -> String {
+        String::from("Set bit indices")
+    }
+
+    fn basic_translate(&self, _num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
+        let (indices, kind): (Vec<u64>, _) = match value {
+            VariableValue::BigUint(v) => (
+                (0..v.bits()).filter(|i| v.bit(*i)).collect(),
+                ValueKind::Normal,
+            ),
+            VariableValue::String(s) => (
+                s.bytes()
+                    .rev()
+                    .enumerate()
+                    .filter(|(_, b)| *b == b'1')
+                    .map(|(i, _)| i as u64)
+                    .collect(),
+                kind_for_binary_representation(s),
+            ),
+        };
+        (format!("{{{}}}", indices.iter().join(",")), kind)
+    }
+
+    fn basic_translate_numeric(&self, _num_bits: u32, _value: &VariableValue) -> Option<f64> {
+        None
+    }
+}
+
 pub struct TrailingOnesTranslator {}
 
 impl BasicTranslator<VarId, ScopeId> for TrailingOnesTranslator {
@@ -977,6 +1010,47 @@ mod test {
                 .basic_translate(40, &VariableValue::BigUint(BigUint::from(0b00100u32)))
                 .0,
             "1"
+        );
+    }
+
+    #[test]
+    fn set_bit_indices_translation_string() {
+        let t = SetBitIndicesTranslator {};
+        assert_eq!(
+            t.basic_translate(6, &VariableValue::String("001001".to_string()))
+                .0,
+            "{0,3}"
+        );
+        assert_eq!(
+            t.basic_translate(5, &VariableValue::String("00000".to_string()))
+                .0,
+            "{}"
+        );
+        let (val, kind) = t.basic_translate(5, &VariableValue::String("1x001".to_string()));
+        assert_eq!(val, "{0,4}");
+        assert_eq!(kind, ValueKind::Undef);
+    }
+
+    #[test]
+    fn set_bit_indices_translation_bigint() {
+        let t = SetBitIndicesTranslator {};
+        assert_eq!(
+            t.basic_translate(150, &VariableValue::BigUint(BigUint::from(0b1001u32)))
+                .0,
+            "{0,3}"
+        );
+        assert_eq!(
+            t.basic_translate(150, &VariableValue::BigUint(BigUint::zero()))
+                .0,
+            "{}"
+        );
+        assert_eq!(
+            t.basic_translate(
+                150,
+                &VariableValue::BigUint((BigUint::one() << 149u32) | BigUint::from(4u32))
+            )
+            .0,
+            "{2,149}"
         );
     }
 

@@ -33,6 +33,9 @@ mod main_impl {
             /// token used by the client to authenticate to the server
             #[clap(long)]
             token: Option<String>,
+            /// address on which to accept WCP clients
+            #[clap(long)]
+            wcp_address: Option<String>,
             /// waveform file that we want to serve
             #[arg(long)]
             file: String,
@@ -133,6 +136,7 @@ mod main_impl {
             port,
             bind_address,
             token,
+            wcp_address,
             file,
         }) = args.command
         {
@@ -142,7 +146,14 @@ mod main_impl {
             let bind_addr = bind_address.unwrap_or(config.server.bind_address);
             let port = port.unwrap_or(config.server.port);
 
-            let res = runtime.block_on(surver::surver_main(port, bind_addr, token, &[file], None));
+            let res = runtime.block_on(surver::surver_main(
+                port,
+                bind_addr,
+                token,
+                wcp_address,
+                &[file],
+                None,
+            ));
             return res;
         }
 

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 
 import re
-import tomllib
 import json
 import subprocess
 
-with open("../Cargo.toml", "rb") as f:
-    data = tomllib.load(f)
-    print(data["workspace"]["package"]["version"])
-    surfer_version_raw = data['workspace']["package"]["version"]
+metadata = json.loads(subprocess.check_output([
+    "cargo", "metadata", "--no-deps", "--format-version", "1"
+], encoding="utf-8", cwd=".."))
+surfer_version_raw = next(
+    package["version"] for package in metadata["packages"]
+    if package["name"] == "surfer"
+)
+print(surfer_version_raw)
 
 surfer_git_rev_list_raw = subprocess.check_output([
     "git", "rev-list", "HEAD"

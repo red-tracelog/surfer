@@ -49,6 +49,7 @@ async fn server_reload_with_overwrite() {
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
+            None,
             &[dest_clone.to_string_lossy().to_string()],
             Some(started_clone),
         )
@@ -184,6 +185,7 @@ async fn server_direct_reload_ok_then_not_modified() {
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
+            None,
             &[dest_clone.to_string_lossy().to_string()],
             Some(started_clone),
         )

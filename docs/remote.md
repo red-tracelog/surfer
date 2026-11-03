@@ -58,6 +58,7 @@ Options:
       --port <PORT>                  Port on which server will listen
       --bind-address <BIND_ADDRESS>  IP address to bind the server to
       --token <TOKEN>                Token used by the client to authenticate to the server
+      --wcp-address <WCP_ADDRESS>    Address on which to accept WCP clients
   -h, --help                         Print help
   -V, --version                      Print version
 ```

@@ -1,5 +1,22 @@
 import * as vscode from 'vscode'
-import * as path from 'path'
+import { LocalWcpSession } from './localWcpSession'
+import { SurverSession, WcpEndpoint } from './surverSession'
+
+interface WcpSession extends vscode.Disposable {
+  readonly wcpEndpoint: WcpEndpoint | undefined
+  sendServerMessage?(message: string): void
+}
+
+interface ViewerTransport {
+  kind: 'surver' | 'host'
+  session: WcpSession
+  waveformUrl: string
+}
+
+interface ViewerSession {
+  transport: Promise<ViewerTransport>
+  wcpReady: Promise<void>
+}
 
 class Wavefile implements vscode.CustomDocument {
   uri: vscode.Uri
@@ -39,8 +56,7 @@ function isDataDialogKind(kind: string): boolean {
  *  Waveforms stay on the URL path deliberately: they can be very large, and
  *  marshalling one through `postMessage` as a JSON array of bytes would be far
  *  more expensive than letting the webview fetch it. */
-function openDialogMessage(kind: string, fileUri: vscode.Uri, webview: vscode.Webview): string | null {
-  const url = webview.asWebviewUri(fileUri).toString()
+function openDialogMessage(kind: string, url: string): string | null {
   switch (kind) {
     case 'waveform_clear':
       return JSON.stringify({ LoadWaveformFileFromUrl: [url, 'Clear'] })
@@ -104,8 +120,13 @@ function normalizeDialogFilters(
 export class SurferWaveformViewerEditorProvider
   implements vscode.CustomReadonlyEditorProvider<Wavefile>
 {
+  private readonly panels = new Map<string, vscode.WebviewPanel>()
+  private readonly viewerSessions = new Map<string, ViewerSession>()
+  private warnedAboutRemoteFallback = false
+
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
-    const provider = new SurferWaveformViewerEditorProvider(context)
+    const output = vscode.window.createOutputChannel('Surfer')
+    const provider = new SurferWaveformViewerEditorProvider(context, output)
     const providerRegistration = vscode.window.registerCustomEditorProvider(
       SurferWaveformViewerEditorProvider.viewType,
       provider,
@@ -115,12 +136,64 @@ export class SurferWaveformViewerEditorProvider
         },
       }
     )
+    const openWaveformRegistration = vscode.commands.registerCommand(
+      'surfer.wcp.openWaveform',
+      async (resource?: vscode.Uri | string) => provider.openWaveform(resource)
+    )
 
-    return providerRegistration
+    return vscode.Disposable.from(providerRegistration, openWaveformRegistration, output)
   }
   private static readonly viewType = 'surfer.waveformViewer'
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly output: vscode.OutputChannel,
+  ) {}
+
+  private async openWaveform(resource?: vscode.Uri | string): Promise<WcpEndpoint> {
+    let uri = typeof resource === 'string' ? vscode.Uri.file(resource) : resource
+    if (uri === undefined) {
+      const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { 'Wave files': ['vcd', 'fst', 'ghw'] },
+        title: 'Open waveform with Surfer',
+      })
+      uri = selected?.[0]
+    }
+    if (uri === undefined) {
+      throw new Error('No waveform was selected')
+    }
+    const key = uri.toString()
+    await vscode.commands.executeCommand(
+      'vscode.openWith',
+      uri,
+      SurferWaveformViewerEditorProvider.viewType
+    )
+    const deadline = Date.now() + 5_000
+    while (!this.viewerSessions.has(key) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    const viewer = this.viewerSessions.get(key)
+    if (viewer === undefined) {
+      throw new Error(`Surfer did not create a WCP session for ${uri.fsPath}`)
+    }
+    const transport = await viewer.transport
+    await Promise.race([
+      viewer.wcpReady,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Timed out waiting for the Surfer WCP client')), 30_000)
+      ),
+    ])
+    const wcpEndpoint = transport.session.wcpEndpoint
+    if (wcpEndpoint === undefined) {
+      throw new Error(`Surfer did not create a WCP endpoint for ${uri.fsPath}`)
+    }
+    this.panels.get(key)?.reveal(undefined, false)
+    return wcpEndpoint
+  }
+
   async openCustomDocument(
     uri: vscode.Uri,
     _openContext: vscode.CustomDocumentOpenContext,
@@ -133,22 +206,73 @@ export class SurferWaveformViewerEditorProvider
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken
   ): Promise<void> {
-    // Add the folder that the document lives in as a localResourceRoot
-    const uriString = document.uri.toString()
-    // TODO: this probably doesn't play well with windows
-    const dirPath = uriString.substring(0, uriString.lastIndexOf('/'))
+    const sessionKey = document.uri.toString()
+    this.panels.set(sessionKey, webviewPanel)
+    const useSurver = vscode.env.remoteName !== undefined
+    const localResourceRoots = [
+      vscode.Uri.joinPath(this.context.extensionUri, 'surfer'),
+      vscode.Uri.joinPath(document.uri, '..'),
+    ]
 
     webviewPanel.webview.options = {
       enableScripts: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(this.context.extensionUri, 'surfer'),
-        vscode.Uri.parse(dirPath, true),
-      ],
+      localResourceRoots,
     }
 
     webviewPanel.webview.html = await this.getHtmlForWebview(webviewPanel.webview)
 
     const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
+    const startHostSession = async (): Promise<ViewerTransport> => ({
+      kind: 'host',
+      session: await LocalWcpSession.start(
+        document.uri,
+        documentUri,
+        (message) => webviewPanel.webview.postMessage({ command: 'WcpMessage', message }),
+        this.output
+      ),
+      waveformUrl: documentUri,
+    })
+    const transport: Promise<ViewerTransport> = useSurver
+      ? SurverSession.start(document.uri, this.output, true)
+          .then<ViewerTransport>((session) => ({
+            kind: 'surver',
+            session,
+            waveformUrl: session.url,
+          }))
+          .catch(async (error) => {
+            this.output.appendLine(`Failed to start Surver; using VS Code file forwarding: ${error}`)
+            if (!this.warnedAboutRemoteFallback) {
+              this.warnedAboutRemoteFallback = true
+              void vscode.window.showWarningMessage(
+                'Surfer could not start Surver and is forwarding the waveform through VS Code. ' +
+                  'Set surfer.surverPath to a compatible Surver executable for better performance.'
+              )
+            }
+            return startHostSession()
+          })
+      : startHostSession()
+    let markWcpReady: (() => void) | undefined
+    const wcpReady = new Promise<void>((resolve) => {
+      markWcpReady = resolve
+    })
+    this.viewerSessions.set(sessionKey, { transport, wcpReady })
+    const additionalRemoteSessions: Promise<SurverSession>[] = []
+    let disposed = false
+    webviewPanel.onDidDispose(() => {
+      disposed = true
+      transport.then((active) => {
+        active.session.dispose()
+      }, () => undefined)
+      if (this.viewerSessions.get(sessionKey)?.transport === transport) {
+        this.viewerSessions.delete(sessionKey)
+      }
+      if (this.panels.get(sessionKey) === webviewPanel) {
+        this.panels.delete(sessionKey)
+      }
+      for (const session of additionalRemoteSessions) {
+        session.then((running) => running.dispose(), () => undefined)
+      }
+    })
 
     // Set when widening `localResourceRoots` forces a webview reload: the
     // message that prompted the widening cannot be delivered to the outgoing
@@ -166,9 +290,42 @@ export class SurferWaveformViewerEditorProvider
             pendingInject = undefined
             webviewPanel.webview.postMessage({ command: 'InjectMessage', message: msg })
           } else {
-            webviewPanel.webview.postMessage({command: "LoadUrl", url: documentUri})
+            try {
+              const active = await transport
+              if (disposed) {
+                active.session.dispose()
+                break
+              }
+              if (active.kind === 'surver') {
+                await webviewPanel.webview.postMessage({
+                  command: 'StartWcp',
+                  url: active.waveformUrl,
+                })
+              } else {
+                await webviewPanel.webview.postMessage({ command: 'StartHostWcp' })
+              }
+              await webviewPanel.webview.postMessage({
+                command: 'LoadUrl',
+                url: active.waveformUrl,
+              })
+            } catch (error) {
+              vscode.window.showErrorMessage(`Surfer: failed to open waveform: ${error}`)
+            }
           }
           break;
+        }
+
+        case 'wcpReady': {
+          markWcpReady?.()
+          break
+        }
+
+        case 'wcpMessage': {
+          transport.then(
+            (active) => active.session.sendServerMessage?.(message.message),
+            (error) => this.output.appendLine(`Local WCP relay failed: ${error}`)
+          )
+          break
         }
 
         case 'showOpenDialog': {
@@ -198,9 +355,32 @@ export class SurferWaveformViewerEditorProvider
                 vscode.window.showErrorMessage(`Surfer: failed to read ${chosen.fsPath}: ${e}`)
               }
             } else {
-              const msg = openDialogMessage(kind, chosen, webviewPanel.webview)
+              const msg = openDialogMessage(
+                kind,
+                webviewPanel.webview.asWebviewUri(chosen).toString()
+              )
               if (msg === null) {
                 console.log(`Surfer: unknown open-dialog kind '${kind}'`)
+                break
+              }
+
+              const active = await transport
+              if (active.kind === 'surver') {
+                try {
+                  const sessionPromise = SurverSession.start(chosen, this.output, false)
+                  additionalRemoteSessions.push(sessionPromise)
+                  const session = await sessionPromise
+                  if (disposed) {
+                    session.dispose()
+                    break
+                  }
+                  webviewPanel.webview.postMessage({
+                    command: 'InjectMessage',
+                    message: openDialogMessage(kind, session.url)!,
+                  })
+                } catch (error) {
+                  vscode.window.showErrorMessage(`Surfer: failed to start remote Surver: ${error}`)
+                }
               } else if (isCoveredByRoots(vscode.Uri.joinPath(chosen, '..'), webviewPanel.webview.options.localResourceRoots)) {
                 // Already reachable; no reload needed.
                 webviewPanel.webview.postMessage({ command: 'InjectMessage', message: msg })

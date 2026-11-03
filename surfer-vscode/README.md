@@ -6,6 +6,19 @@ This extension allows you to use the [Surfer](https://surfer-project.org/) wavef
 
 Just install the extension and open a `.vcd`, `.fst` or `.ghw` file!
 
+When connected to a remote VS Code workspace, the extension first tries to run
+`surver` in the remote extension host so the waveform stays there. Use the
+`surfer.surverPath` setting to select a compatible executable outside the
+remote host's `PATH`. If Surver is unavailable, the extension still works by
+forwarding the waveform through VS Code and displays a one-time performance
+warning. Each waveform gets a dynamically assigned WCP endpoint. Other
+workspace extensions can open a waveform and obtain that endpoint with
+`vscode.commands.executeCommand<{host: string, port: number}>('surfer.wcp.openWaveform', uri)`.
+The command opens or reveals that waveform and returns its WCP endpoint, allowing
+the caller to attach without resetting the existing viewer state.
+In a local VS Code window, the same command uses the normal direct file load
+and hosts only the WCP relay in the extension process; it does not run Surver.
+
 ![Screenshot of the Surfer VS Code extension displaying a number of waveforms](https://gitlab.com/surfer-project/surfer/-/raw/main/surfer-vscode/screenshot.png)
 
 This extension is a port of the version of Surfer that runs in a web browser, which you can try [here](https://app.surfer-project.org/). As this extension also runs Surfer in a browser, it is subject to the same restrictions as the online version - some features are missing, and it won't be as fast as the desktop version due to a lack of multithreading support.

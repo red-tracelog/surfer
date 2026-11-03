@@ -1,11 +1,11 @@
 //! Handling of external communication in Surver.
 use bincode::Options;
 use eyre::{Result, WrapErr as _, anyhow, bail};
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::fs;
@@ -22,6 +22,7 @@ use wellen::{
     CompressedSignal, CompressedTimeTable, FileFormat, Hierarchy, Signal, SignalRef, Time, viewers,
 };
 
+use crate::wcp::WcpRelay;
 use crate::{
     BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverFileInfo,
     SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS, WELLEN_VERSION, X_SURFER_VERSION,
@@ -285,6 +286,13 @@ impl DefaultHeader for hyper::http::response::Builder {
             .header(X_WELLEN_VERSION, WELLEN_VERSION)
             .header(X_SURFER_VERSION, SURFER_VERSION)
             .header("Cache-Control", "no-cache")
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            .header("Access-Control-Allow-Headers", "Content-Type")
+            .header(
+                "Access-Control-Expose-Headers",
+                "Server, x-surfer-version, x-wellen-version",
+            )
     }
 }
 
@@ -410,6 +418,7 @@ async fn handle(
     state: Arc<RwLock<SurverState>>,
     shared: Arc<ReadOnly>,
     txs: Vec<Sender<LoaderMessage>>,
+    wcp_relay: Option<Arc<WcpRelay>>,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>> {
     // Check if favicon is requested
@@ -438,6 +447,70 @@ async fn handle(
         // no token
         warn!("Received request with no token: {:?}", req.uri());
         return not_found_response(&[]);
+    }
+
+    if req.method() == Method::OPTIONS {
+        return Ok(Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .default_header()
+            .body(Full::default())?);
+    }
+
+    if path_parts.get(1..3) == Some(&["wcp", "address"]) && req.method() == Method::GET {
+        let Some(relay) = wcp_relay else {
+            return not_found_response(&[]);
+        };
+        let address = relay.address();
+        return build_response(
+            StatusCode::OK,
+            JSON_MIME,
+            serde_json::to_vec(&serde_json::json!({
+                "host": address.ip().to_string(),
+                "port": address.port(),
+            }))?,
+        );
+    }
+
+    if path_parts.get(1..3) == Some(&["wcp", "cs"]) && req.method() == Method::GET {
+        let Some(relay) = wcp_relay else {
+            return not_found_response(&[]);
+        };
+        return match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            relay.next_client_message(),
+        )
+        .await
+        {
+            Ok(message) => build_response(StatusCode::OK, JSON_MIME, message),
+            Err(_) => Ok(Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .default_header()
+                .body(Full::default())?),
+        };
+    }
+
+    if path_parts.get(1..3) == Some(&["wcp", "sc"]) && req.method() == Method::POST {
+        let Some(relay) = wcp_relay else {
+            return not_found_response(&[]);
+        };
+        let message = req.collect().await?.to_bytes().to_vec();
+        relay.send_server_message(message).await?;
+        return Ok(Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .default_header()
+            .body(Full::default())?);
+    }
+
+    if path_parts.get(1..3) == Some(&["wcp", "viewer"]) && req.method() == Method::POST {
+        let Some(relay) = wcp_relay else {
+            return not_found_response(&[]);
+        };
+        let url = String::from_utf8(req.collect().await?.to_bytes().to_vec())?;
+        relay.set_viewer_url(url).await?;
+        return Ok(Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .default_header()
+            .body(Full::default())?);
     }
 
     // Try to parse file index from path_parts[1]
@@ -470,6 +543,7 @@ pub async fn surver_main(
     port: u16,
     bind_address: String,
     token: Option<String>,
+    wcp_address: Option<String>,
     filenames: &[String],
     started: Option<ServerStartedFlag>,
 ) -> Result<()> {
@@ -541,6 +615,11 @@ pub async fn surver_main(
         warn!("Surver traffic is unencrypted and unauthenticated - use with caution!");
     }
 
+    let wcp_relay = match wcp_address {
+        Some(address) => Some(crate::wcp::start(address, filenames).await?),
+        None => None,
+    };
+
     // immutable read-only data
     let addr = SocketAddr::new(ip_addr, port);
     let url = format!("http://{addr}/{token}");
@@ -583,9 +662,17 @@ pub async fn surver_main(
         let state = state.clone();
         let shared = shared.clone();
         let txs = txs.clone();
+        let wcp_relay = wcp_relay.clone();
         tokio::task::spawn(async move {
-            let service =
-                service_fn(move |req| handle(state.clone(), shared.clone(), txs.clone(), req));
+            let service = service_fn(move |req| {
+                handle(
+                    state.clone(),
+                    shared.clone(),
+                    txs.clone(),
+                    wcp_relay.clone(),
+                    req,
+                )
+            });
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
                 error!("server error: {e}");
             }

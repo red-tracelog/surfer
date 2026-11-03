@@ -24,6 +24,9 @@ struct Args {
     /// Token used by the client to authenticate to the server
     #[clap(long)]
     token: Option<String>,
+    /// Address on which to accept WCP clients
+    #[clap(long)]
+    wcp_address: Option<String>,
 }
 
 #[derive(Debug, Default, clap::Args)]
@@ -108,6 +111,7 @@ fn main() -> Result<()> {
         port,
         bind_addr,
         args.token,
+        args.wcp_address,
         &file_names,
         None,
     ))

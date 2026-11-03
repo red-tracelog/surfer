@@ -3,10 +3,13 @@ pattern_script = """
     <script type=\"module\">
         import init from '{base}{js}';
         await init({module_or_path: '{base}{wasm}'});
-        import {WebHandle, inject_message, id_of_name, draw_text_arrow} from '{base}{js}';
+        import {WebHandle, inject_message, id_of_name, draw_text_arrow, start_wcp, next_wcp_sc_message, handle_wcp_cs_message} from '{base}{js}';
         window.inject_message = inject_message;
         window.id_of_name = id_of_name;
         window.draw_text_arrow = draw_text_arrow;
+        window.surfer_start_wcp = start_wcp;
+        window.surfer_next_wcp_sc_message = next_wcp_sc_message;
+        window.surfer_handle_wcp_cs_message = handle_wcp_cs_message;
         /*SURFER_SETUP_HOOKS*/
     </script>
     """

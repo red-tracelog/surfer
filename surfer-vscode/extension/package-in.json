@@ -4,6 +4,22 @@
     "Visualization"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "surfer.wcp.openWaveform",
+        "title": "Open Waveform with Surfer WCP"
+      }
+    ],
+    "configuration": {
+      "properties": {
+        "surfer.surverPath": {
+          "default": "surver",
+          "description": "Path to the Surver executable in the workspace extension host.",
+          "type": "string"
+        }
+      },
+      "title": "Surfer"
+    },
     "customEditors": [
       {
         "displayName": "Surfer Waveform Viewer",
@@ -46,7 +62,6 @@
     "vscode": "^1.85.0"
   },
   "extensionKind": [
-    "ui",
     "workspace"
   ],
   "icon": "icon.png",

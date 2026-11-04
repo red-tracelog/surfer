@@ -11,6 +11,7 @@ use tracing::{info, warn};
 use crate::SystemState;
 use crate::displayed_item::{DisplayedFieldRef, DisplayedItem};
 use crate::translation::TranslationResultExt;
+use crate::util::parse_biguint;
 use crate::wave_container::VariableRefExt;
 
 impl SystemState {
@@ -247,25 +248,4 @@ fn search_transitions(
     }
 
     found
-}
-
-/// Parse a string into a [`BigUint`], supporting decimal, hex (`0x`), binary
-/// (`0b`) and octal (`0o`) prefixes.  Used by the "go to value" search to match
-/// raw numeric values.
-fn parse_biguint(s: &str) -> Option<BigUint> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // Strip a leading + sign.
-    let s = s.strip_prefix('+').unwrap_or(s);
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        BigUint::parse_bytes(hex.as_bytes(), 16)
-    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-        BigUint::parse_bytes(bin.as_bytes(), 2)
-    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
-        BigUint::parse_bytes(oct.as_bytes(), 8)
-    } else {
-        BigUint::parse_bytes(s.as_bytes(), 10)
-    }
 }

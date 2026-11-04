@@ -2,6 +2,7 @@
 use crate::{displayed_item_tree::VisibleItemIndex, wave_data::WaveData};
 use camino::Utf8PathBuf;
 use egui::RichText;
+use num::BigUint;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
@@ -114,9 +115,48 @@ pub(crate) fn get_multi_extension(path: &Utf8PathBuf) -> Option<String> {
     None
 }
 
+/// Parse an unsigned integer literal into a [`BigUint`].
+///
+/// Accepts decimal, or binary/octal/hex with a `0b`/`0o`/`0x` prefix (lower or
+/// upper case), a leading `+` and surrounding whitespace.
+#[must_use]
+pub(crate) fn parse_biguint(s: &str) -> Option<BigUint> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Strip a leading + sign.
+    let s = s.strip_prefix('+').unwrap_or(s);
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        BigUint::parse_bytes(hex.as_bytes(), 16)
+    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        BigUint::parse_bytes(bin.as_bytes(), 2)
+    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        BigUint::parse_bytes(oct.as_bytes(), 8)
+    } else {
+        BigUint::parse_bytes(s.as_bytes(), 10)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_biguint() {
+        let n = |v: u32| Some(BigUint::from(v));
+        assert_eq!(parse_biguint("42"), n(42));
+        assert_eq!(parse_biguint(" +42 "), n(42));
+        assert_eq!(parse_biguint("0x2A"), n(42));
+        assert_eq!(parse_biguint("0X2a"), n(42));
+        assert_eq!(parse_biguint("0b101010"), n(42));
+        assert_eq!(parse_biguint("0o52"), n(42));
+        assert_eq!(parse_biguint(""), None);
+        assert_eq!(parse_biguint("0x"), None);
+        assert_eq!(parse_biguint("0b102"), None);
+        assert_eq!(parse_biguint("x"), None);
+        assert_eq!(parse_biguint("-1"), None);
+    }
 
     #[test]
     fn test_uint_idx_to_alpha_idx_basic_width_1() {

@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::{
     translation::check_single_wordlength,
+    util::split_radix_prefix,
     wave_container::{ScopeId, VarId, VariableMeta},
 };
 
@@ -394,52 +395,45 @@ fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseErro
     // Support underscore separators
     let cleaned = token.replace('_', "");
 
-    // Binary prefix (0b or 0B)
-    if cleaned.starts_with("0b") || cleaned.starts_with("0B") {
-        let bin_str = &cleaned[2..];
-        if let Some(val) = BigUint::parse_bytes(bin_str.as_bytes(), 2) {
-            // Preserve the binary string length (e.g., 0b0101 => 4 bits, not 3)
-            let bits = bin_str.len() as u32;
-            return Ok((VariableValue::BigUint(val), bits));
+    let (radix, digits) = split_radix_prefix(&cleaned);
+    match radix {
+        2 => {
+            if let Some(val) = BigUint::parse_bytes(digits.as_bytes(), 2) {
+                // Preserve the binary string length (e.g., 0b0101 => 4 bits, not 3)
+                let bits = digits.len() as u32;
+                return Ok((VariableValue::BigUint(val), bits));
+            }
+            // String literal
+            let lower = digits.to_lowercase();
+
+            // Validate that string contains only valid characters: 01zx-hlwu
+            if lower
+                .chars()
+                .all(|c| matches!(c, '0' | '1' | 'z' | 'x' | '-' | 'h' | 'l' | 'w' | 'u'))
+            {
+                return Ok((VariableValue::String(lower.clone()), lower.len() as u32));
+            }
+
+            return Err(MappingParseError::InvalidBitsValue(token.to_string()));
         }
-        // String literal
-        let lower = bin_str.to_lowercase();
-
-        // Validate that string contains only valid characters: 01zx-hlwu
-        if lower
-            .chars()
-            .all(|c| matches!(c, '0' | '1' | 'z' | 'x' | '-' | 'h' | 'l' | 'w' | 'u'))
-        {
-            return Ok((VariableValue::String(lower.clone()), lower.len() as u32));
+        8 | 16 => {
+            let num = BigUint::parse_bytes(digits.as_bytes(), radix).ok_or_else(|| {
+                if radix == 8 {
+                    MappingParseError::InvalidOctal(token.to_string())
+                } else {
+                    MappingParseError::InvalidHex(token.to_string())
+                }
+            })?;
+            // Actual number of bits required to represent the number, not a
+            // multiple of 3 or 4
+            let bits = num.bits() as u32;
+            return Ok((VariableValue::BigUint(num), bits));
         }
-
-        return Err(MappingParseError::InvalidBitsValue(token.to_string()));
-    }
-
-    // Octal prefix (0o or 0O)
-    if cleaned.starts_with("0o") || cleaned.starts_with("0O") {
-        let oct_str = &cleaned[2..];
-        let num = BigUint::parse_bytes(oct_str.as_bytes(), 8)
-            .ok_or_else(|| MappingParseError::InvalidOctal(token.to_string()))?;
-        // Actual number of bits required to represent the octal number
-        // We do not want a multiple of 3 here, but the actual bit width
-        let bits = num.bits() as u32;
-        return Ok((VariableValue::BigUint(num), bits));
-    }
-
-    // Hex prefix (0x or 0X)
-    if cleaned.starts_with("0x") || cleaned.starts_with("0X") {
-        let hex_str = &cleaned[2..];
-        let num = BigUint::parse_bytes(hex_str.as_bytes(), 16)
-            .ok_or_else(|| MappingParseError::InvalidHex(token.to_string()))?;
-        // Actual number of bits required to represent the hex number
-        // We do not want a multiple of 4 here, but the actual bit width
-        let bits = num.bits() as u32;
-        return Ok((VariableValue::BigUint(num), bits));
+        _ => {}
     }
 
     // Decimal (default for numeric strings)
-    if let Some(num) = BigUint::parse_bytes(cleaned.as_bytes(), 10) {
+    if let Some(num) = BigUint::parse_bytes(digits.as_bytes(), 10) {
         let bits = num.bits() as u32;
         return Ok((VariableValue::BigUint(num), bits));
     }

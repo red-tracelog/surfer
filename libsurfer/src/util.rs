@@ -115,32 +115,48 @@ pub(crate) fn get_multi_extension(path: &Utf8PathBuf) -> Option<String> {
     None
 }
 
+/// Split a case-insensitive `0b`, `0o` or `0x` prefix off an integer literal.
+///
+/// Returns the radix (2, 8 or 16, or 10 if there is no prefix) and the remaining digits.
+#[must_use]
+pub(crate) fn split_radix_prefix(s: &str) -> (u32, &str) {
+    let radix = match s.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("0b") => 2,
+        Some("0o") => 8,
+        Some("0x") => 16,
+        _ => return (10, s),
+    };
+    (radix, &s[2..])
+}
+
 /// Parse an unsigned integer literal into a [`BigUint`].
 ///
-/// Accepts decimal, or binary/octal/hex with a `0b`/`0o`/`0x` prefix (lower or
-/// upper case), a leading `+` and surrounding whitespace.
+/// Accepts decimal, or binary/octal/hex with a `0b`/`0o`/`0x` prefix (any case),
+/// a leading `+` and surrounding whitespace.
 #[must_use]
 pub(crate) fn parse_biguint(s: &str) -> Option<BigUint> {
     let s = s.trim();
-    if s.is_empty() {
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let (radix, digits) = split_radix_prefix(s);
+    if digits.is_empty() {
         return None;
     }
-    // Strip a leading + sign.
-    let s = s.strip_prefix('+').unwrap_or(s);
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        BigUint::parse_bytes(hex.as_bytes(), 16)
-    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-        BigUint::parse_bytes(bin.as_bytes(), 2)
-    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
-        BigUint::parse_bytes(oct.as_bytes(), 8)
-    } else {
-        BigUint::parse_bytes(s.as_bytes(), 10)
-    }
+    BigUint::parse_bytes(digits.as_bytes(), radix)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_split_radix_prefix() {
+        assert_eq!(split_radix_prefix("0b101"), (2, "101"));
+        assert_eq!(split_radix_prefix("0O17"), (8, "17"));
+        assert_eq!(split_radix_prefix("0xFf"), (16, "Ff"));
+        assert_eq!(split_radix_prefix("42"), (10, "42"));
+        assert_eq!(split_radix_prefix("0"), (10, "0"));
+        assert_eq!(split_radix_prefix(""), (10, ""));
+    }
 
     #[test]
     fn test_parse_biguint() {

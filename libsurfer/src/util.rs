@@ -132,12 +132,13 @@ pub(crate) fn split_radix_prefix(s: &str) -> (u32, &str) {
 /// Parse an unsigned integer literal into a [`BigUint`].
 ///
 /// Accepts decimal, or binary/octal/hex with a `0b`/`0o`/`0x` prefix (any case),
-/// a leading `+` and surrounding whitespace.
+/// `_` digit separators, a leading `+` and surrounding whitespace.
 #[must_use]
 pub(crate) fn parse_biguint(s: &str) -> Option<BigUint> {
     let s = s.trim();
     let s = s.strip_prefix('+').unwrap_or(s);
     let (radix, digits) = split_radix_prefix(s);
+    let digits = digits.replace('_', "");
     if digits.is_empty() {
         return None;
     }
@@ -165,10 +166,12 @@ mod tests {
         assert_eq!(parse_biguint(" +42 "), n(42));
         assert_eq!(parse_biguint("0x2A"), n(42));
         assert_eq!(parse_biguint("0X2a"), n(42));
-        assert_eq!(parse_biguint("0b101010"), n(42));
+        assert_eq!(parse_biguint("0b10_1010"), n(42));
         assert_eq!(parse_biguint("0o52"), n(42));
+        assert_eq!(parse_biguint("1_000"), n(1000));
         assert_eq!(parse_biguint(""), None);
         assert_eq!(parse_biguint("0x"), None);
+        assert_eq!(parse_biguint("0x_"), None);
         assert_eq!(parse_biguint("0b102"), None);
         assert_eq!(parse_biguint("x"), None);
         assert_eq!(parse_biguint("-1"), None);

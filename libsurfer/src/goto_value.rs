@@ -98,7 +98,7 @@ impl SystemState {
             }
             // 2. Fallback: compare against the raw value.  For BigUint,
             //    accept decimal, hex (0x), binary (0b) and octal (0o)
-            //    representations.  For String values, compare directly.
+            //    representations, with optional `_` separators.  For String values, compare directly.
             match val {
                 VariableValue::BigUint(v) => {
                     if let Some(parsed) = parse_biguint(&target) {

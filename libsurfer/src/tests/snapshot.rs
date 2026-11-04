@@ -3905,6 +3905,52 @@ fn theme_menu_radio_button() {
     compare_with_snapshot(&Utf8PathBuf::from("theme_menu_radio_button"), &new);
 }
 
+snapshot_ui_with_file_and_msgs! {goto_value_z, "examples/vcd_extensions.vcd", [
+    Message::AddVariables(
+        [
+            VariableRef::from_hierarchy_string("main.WIRE16_var"),
+        ]
+        .into(),
+    ),
+    Message::FocusItem(VisibleItemIndex(0)),
+    Message::GoToValue {
+        value: "z".to_string(),
+        next: true,
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {goto_value_x, "examples/vcd_extensions.vcd", [
+    Message::AddVariables(
+        [
+            VariableRef::from_hierarchy_string("main.WIRE16_var"),
+        ]
+        .into(),
+    ),
+    Message::FocusItem(VisibleItemIndex(0)),
+    Message::GoToValue {
+        value: "x".to_string(),
+        next: true,
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {goto_value_undef, "examples/vcd_extensions.vcd", [
+    Message::AddVariables(
+        [
+            VariableRef::from_hierarchy_string("main.WIRE16_var"),
+        ]
+        .into(),
+    ),
+    Message::FocusItem(VisibleItemIndex(0)),
+    Message::VariableFormatChange(
+        MessageTarget::CurrentSelection,
+        String::from("Unsigned"),
+    ),
+    Message::GoToValue {
+        value: "undef".to_string(),
+        next: true,
+    },
+]}
+
 snapshot_ui_with_file_and_msgs! {set_bit_indices_translator, "examples/bit_indices.vcd", [
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.mask"),
@@ -3912,4 +3958,21 @@ snapshot_ui_with_file_and_msgs! {set_bit_indices_translator, "examples/bit_indic
     ]),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Binary")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Set bit indices")),
+]}
+
+snapshot_ui_with_file_and_msgs! {goto_value_next, "examples/analog.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["top"]), false),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(4)),
+        Some(crate::displayed_item::AnalogSettings { render_style: crate::displayed_item::AnalogRenderStyle::Interpolated, y_axis_scale: crate::displayed_item::AnalogYAxisScale::Viewport }),
+    ),
+    Message::FocusItem(VisibleItemIndex(3)),
+    Message::GoToValue {
+        value: "f9".to_string(),
+        next: true,
+    },
+    Message::GoToValue {
+        value: "f9".to_string(),
+        next: true,
+    },
 ]}

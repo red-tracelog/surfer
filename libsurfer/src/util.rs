@@ -2,6 +2,7 @@
 use crate::{displayed_item_tree::VisibleItemIndex, wave_data::WaveData};
 use camino::Utf8PathBuf;
 use egui::RichText;
+use num::BigUint;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
@@ -114,9 +115,67 @@ pub(crate) fn get_multi_extension(path: &Utf8PathBuf) -> Option<String> {
     None
 }
 
+/// Split a case-insensitive `0b`, `0o` or `0x` prefix off an integer literal.
+///
+/// Returns the radix (2, 8 or 16, or 10 if there is no prefix) and the remaining digits.
+#[must_use]
+pub(crate) fn split_radix_prefix(s: &str) -> (u32, &str) {
+    let radix = match s.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("0b") => 2,
+        Some("0o") => 8,
+        Some("0x") => 16,
+        _ => return (10, s),
+    };
+    (radix, &s[2..])
+}
+
+/// Parse an unsigned integer literal into a [`BigUint`].
+///
+/// Accepts decimal, or binary/octal/hex with a `0b`/`0o`/`0x` prefix (any case),
+/// `_` digit separators, a leading `+` and surrounding whitespace.
+#[must_use]
+pub(crate) fn parse_biguint(s: &str) -> Option<BigUint> {
+    let s = s.trim();
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let (radix, digits) = split_radix_prefix(s);
+    let digits = digits.replace('_', "");
+    if digits.is_empty() {
+        return None;
+    }
+    BigUint::parse_bytes(digits.as_bytes(), radix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_split_radix_prefix() {
+        assert_eq!(split_radix_prefix("0b101"), (2, "101"));
+        assert_eq!(split_radix_prefix("0O17"), (8, "17"));
+        assert_eq!(split_radix_prefix("0xFf"), (16, "Ff"));
+        assert_eq!(split_radix_prefix("42"), (10, "42"));
+        assert_eq!(split_radix_prefix("0"), (10, "0"));
+        assert_eq!(split_radix_prefix(""), (10, ""));
+    }
+
+    #[test]
+    fn test_parse_biguint() {
+        let n = |v: u32| Some(BigUint::from(v));
+        assert_eq!(parse_biguint("42"), n(42));
+        assert_eq!(parse_biguint(" +42 "), n(42));
+        assert_eq!(parse_biguint("0x2A"), n(42));
+        assert_eq!(parse_biguint("0X2a"), n(42));
+        assert_eq!(parse_biguint("0b10_1010"), n(42));
+        assert_eq!(parse_biguint("0o52"), n(42));
+        assert_eq!(parse_biguint("1_000"), n(1000));
+        assert_eq!(parse_biguint(""), None);
+        assert_eq!(parse_biguint("0x"), None);
+        assert_eq!(parse_biguint("0x_"), None);
+        assert_eq!(parse_biguint("0b102"), None);
+        assert_eq!(parse_biguint("x"), None);
+        assert_eq!(parse_biguint("-1"), None);
+    }
 
     #[test]
     fn test_uint_idx_to_alpha_idx_basic_width_1() {

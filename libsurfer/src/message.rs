@@ -279,6 +279,12 @@ pub enum Message {
         viewport_idx: usize,
     },
     GoToTime(Option<BigInt>, usize),
+    /// Search from the cursor for the next/previous time the focused variable
+    /// takes the given (displayed) value, and move the cursor there.
+    GoToValue {
+        value: String,
+        next: bool,
+    },
     SetMenuVisible(bool),
     ToggleMenu,
     SetToolbarVisible(bool),

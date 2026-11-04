@@ -106,6 +106,8 @@ pub struct SystemState {
     pub scope_ref_to_expand: RefCell<Option<ScopeExpandType>>,
 
     pub(crate) time_widgets: RefCell<AHashMap<String, TimeInputState>>,
+    /// Text content of the "go to value" toolbar input, persisted between frames.
+    pub(crate) value_input: RefCell<String>,
     /// Map of widget id -> focused state.
     pub(crate) text_edit_focused: AHashMap<String, bool>,
     /// Map of widget id -> one-shot request focus flag.
@@ -195,6 +197,7 @@ impl SystemState {
             surver_load_options: RefCell::new(LoadOptions::Clear),
             expand_parameter_section: false,
             time_widgets: RefCell::new(AHashMap::new()),
+            value_input: RefCell::new(String::new()),
             text_edit_focused: AHashMap::new(),
             text_edit_request_focus: AHashMap::new(),
             frame_buffer_content: None,

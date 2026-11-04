@@ -5,6 +5,7 @@ use emath::{Align, Vec2};
 
 use std::collections::HashSet;
 
+use crate::displayed_item::DisplayedItem;
 use crate::message::MessageTarget;
 use crate::mousegestures::AnnotationKind;
 use crate::wave_container::SimulationStatus;
@@ -17,6 +18,7 @@ use crate::{
 };
 
 pub(crate) const TOOLBAR_TIME_ID: &str = "toolbar-time";
+pub(crate) const TOOLBAR_VALUE_ID: &str = "toolbar-value";
 
 #[derive(Clone, Copy)]
 pub(crate) struct ToolbarGroupSpec {
@@ -24,7 +26,7 @@ pub(crate) struct ToolbarGroupSpec {
     pub label: &'static str,
 }
 
-const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
+const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 13] = [
     ToolbarGroupSpec {
         id: "menu",
         label: "Menu",
@@ -68,6 +70,10 @@ const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
     ToolbarGroupSpec {
         id: "time",
         label: "Time",
+    },
+    ToolbarGroupSpec {
+        id: "value",
+        label: "Value",
     },
     ToolbarGroupSpec {
         id: "annotations",
@@ -179,6 +185,23 @@ impl SystemState {
         }
         if self.user.waves.is_some() {
             visible.insert("time");
+        }
+        // The value search box is only relevant when a variable is focused.
+        let value_visible = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.focused_item)
+            .and_then(|vidx| {
+                let waves = self.user.waves.as_ref().unwrap();
+                waves
+                    .items_tree
+                    .get_visible(vidx)
+                    .and_then(|node| waves.displayed_items.get(&node.item_ref))
+            })
+            .is_some_and(|item| matches!(item, DisplayedItem::Variable(_)));
+        if value_visible {
+            visible.insert("value");
         }
         visible
     }
@@ -310,6 +333,7 @@ impl SystemState {
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
                     "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
+                    "value" => self.draw_toolbar_group_value_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
@@ -680,6 +704,117 @@ impl SystemState {
         if let Some(waves) = &self.user.waves {
             self.time_input_widget(ui, TOOLBAR_TIME_ID, waves, msgs);
         }
+    }
+
+    /// Draw the "go to value" input box.  Only shown when a variable is focused;
+    /// the visibility check is performed in [`Self::visible_toolbar_groups`].
+    fn draw_toolbar_group_value_input(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+        let Some(waves) = &self.user.waves else {
+            return;
+        };
+        let Some(focused) = waves.focused_item else {
+            return;
+        };
+
+        // Confirm the focused item is actually a variable.
+        let is_variable = waves
+            .items_tree
+            .get_visible(focused)
+            .and_then(|node| waves.displayed_items.get(&node.item_ref))
+            .is_some_and(|item| matches!(item, crate::displayed_item::DisplayedItem::Variable(_)));
+        if !is_variable {
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            let mut input = self.value_input.borrow().clone();
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut input)
+                    .desired_width(80.0)
+                    .hint_text("value"),
+            );
+
+            // One-shot focus request (e.g. triggered by a keyboard shortcut).
+            let request_focus = *self
+                .text_edit_request_focus
+                .get(TOOLBAR_VALUE_ID)
+                .unwrap_or(&false);
+            if request_focus && !response.has_focus() {
+                response.request_focus();
+                msgs.push(Message::SetRequestTextEditFocus(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+            }
+
+            if response.changed() {
+                *self.value_input.borrow_mut() = input.clone();
+            }
+
+            if response.gained_focus() {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    true,
+                ));
+            }
+
+            let trimmed = input.trim();
+            let button_enabled = !trimmed.is_empty();
+
+            // "Search previous" button
+            let prev_button =
+                Button::new(RichText::new(icons::CONTRACT_LEFT_FILL).heading()).frame(false);
+            if ui
+                .add_enabled(button_enabled, prev_button)
+                .on_hover_text("Go to previous value")
+                .clicked()
+            {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: false,
+                    });
+                }
+            }
+
+            // "Search next" button
+            let next_button =
+                Button::new(RichText::new(icons::CONTRACT_RIGHT_FILL).heading()).frame(false);
+            if ui
+                .add_enabled(button_enabled, next_button)
+                .on_hover_text("Go to next value")
+                .clicked()
+            {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: true,
+                    });
+                }
+            }
+
+            // Enter key triggers "search next"
+            if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                msgs.push(Message::SetTextEditFocused(
+                    TOOLBAR_VALUE_ID.to_string(),
+                    false,
+                ));
+                if button_enabled {
+                    msgs.push(Message::GoToValue {
+                        value: trimmed.to_string(),
+                        next: true,
+                    });
+                }
+            }
+        });
     }
 
     /// Helper function to help the annotation buttons know what icon to display and message to send.

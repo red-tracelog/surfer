@@ -29,6 +29,7 @@ pub mod frame_buffer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fst_export;
 pub mod fzcmd;
+pub mod goto_value;
 pub mod graphics;
 pub mod help;
 pub mod hierarchy;
@@ -838,6 +839,9 @@ impl SystemState {
                         "Go to time: No timestamps count, even though waveforms should be loaded"
                     );
                 }
+            }
+            Message::GoToValue { value, next } => {
+                self.handle_goto_value(&value, next);
             }
             Message::SetTimeUnit(timeunit) => {
                 self.user.wanted_timeunit = timeunit;

@@ -4,6 +4,38 @@
     "Visualization"
   ],
   "contributes": {
+    "configuration": {
+      "properties": {
+        "surfer.localMode": {
+          "default": "auto",
+          "description": "Whether to use a local Surfer/Surver installation instead of the built-in WASM viewer.",
+          "enum": [
+            "auto",
+            "Surver (integrated UI)",
+            "Surfer (new window)",
+            "WASM"
+          ],
+          "enumDescriptions": [
+            "Use a local surver if installed, otherwise the built-in WASM viewer.",
+            "Always use a local surver; warn and fall back to the built-in viewer if it is missing.",
+            "Open files in the native Surfer application (separate window) if installed.",
+            "Only use the built-in WASM viewer."
+          ],
+          "type": "string"
+        },
+        "surfer.surferPath": {
+          "default": "",
+          "description": "Path to the native surfer executable. Empty means look up 'surfer' on PATH.",
+          "type": "string"
+        },
+        "surfer.surverPath": {
+          "default": "",
+          "description": "Path to the surver executable. Empty means look up 'surver' on PATH.",
+          "type": "string"
+        }
+      },
+      "title": "Surfer"
+    },
     "customEditors": [
       {
         "displayName": "Surfer Waveform Viewer",

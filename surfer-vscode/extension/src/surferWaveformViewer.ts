@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
+import { startLocal, LocalProcess } from './localBackend'
 
 class Wavefile implements vscode.CustomDocument {
   uri: vscode.Uri
@@ -146,9 +147,25 @@ export class SurferWaveformViewerEditorProvider
       ],
     }
 
+    // Prefer a local surver/surfer installation if configured and available
+    const local = await startLocal(document.uri)
+    if (local) {
+      const proc: LocalProcess = local.proc
+      webviewPanel.onDidDispose(() => proc.dispose())
+    }
+
+    if (local?.kind === 'surfer') {
+      webviewPanel.webview.html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:1em">
+        Opened <b>${this.escapeHtml(document.uri.fsPath)}</b> in native Surfer.
+        Closing this tab closes the Surfer window.</body></html>`
+      return
+    }
+
     webviewPanel.webview.html = await this.getHtmlForWebview(webviewPanel.webview)
 
-    const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
+    // With surver, the embedded Surfer loads from the local server instead of the file itself
+    const documentUri =
+      local?.proc.url ?? webviewPanel.webview.asWebviewUri(document.uri).toString()
 
     // Set when widening `localResourceRoots` forces a webview reload: the
     // message that prompted the widening cannot be delivered to the outgoing
@@ -329,6 +346,10 @@ export class SurferWaveformViewerEditorProvider
     html = html.replaceAll("/*SURFER_SETUP_HOOKS*/", `${load_notifier}`)
 
     return html
+  }
+
+  private escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
   }
 
   private replaceAll(input: string, search: string, replacement: string): string {

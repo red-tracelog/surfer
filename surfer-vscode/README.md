@@ -10,6 +10,21 @@ Just install the extension and open a `.vcd`, `.fst` or `.ghw` file!
 
 This extension is a port of the version of Surfer that runs in a web browser, which you can try [here](https://app.surfer-project.org/). As this extension also runs Surfer in a browser, it is subject to the same restrictions as the online version - some features are missing, and it won't be as fast as the desktop version due to a lack of multithreading support.
 
+## Using a local Surver/Surfer installation
+
+By default the extension looks for a local `surver` installation in $PATH and, if found, uses it. Otherwise it uses the built-in WASM viewer.
+
+An extension setting specifies the behaviour:
+
+- `surfer.localMode`:
+  - `auto` (default): use `surver` if installed, otherwise the built-in version. The WASM Surfer loads data from a `surver` started on the file, improving load time and performance.
+  - `surver`: same as `auto`, but warn if `surver` is missing.
+  - `surfer`: open the file in the native `surfer` application, in a separate window. Closing the tab closes the window.
+  - `off`: only use the built-in WASM version.
+- `surfer.surverPath` / `surfer.surferPath`: paths to the executables. They default to looking up `surver` and `surfer` on `PATH`.
+
+Local backends are only used for files on the local file system (`file:` URIs). Output from the spawned processes is shown in the "Surfer" output channel.
+
 ## Known Issues
 
 Installing this extension alongside other extensions that open `.vcd` files will likely cause trouble. If opening a `.vcd` file doesn't load Surfer, then check to make sure that no other waveform viewer extensions are installed in VS Code. If that doesn't work, then feel free to open an issue on our [Gitlab](https://gitlab.com/surfer-project/surfer)!

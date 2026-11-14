@@ -1,10 +1,11 @@
-use num::{BigInt, FromPrimitive};
-use serde::{Deserialize, Deserializer, Serialize, de};
+use num::{BigInt, FromPrimitive, ToPrimitive};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 
-/// A reference to a currently displayed item. From the protocol perspective,
-/// This can be any integer or a string and what it is is decided by the server,
-/// in this case surfer.
+/// A reference to a currently displayed item.
+///
+/// From the protocol perspective, this can be any integer or a string
+/// and what it is is decided by the server, in this case surfer.
 /// Since the representation is up to the server, clients cannot generate these on its
 /// own, it can only use the ones it has received from the server.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -135,24 +136,28 @@ pub enum WcpCommand {
         recursive: bool,
     },
     /// Adds the specified markers to the view.
+    ///
     /// Responds with [`WcpResponse::add_markers`] which contains a list of the item references
     /// that can be used to reference the added items later
     /// Responds with an error if no waveforms are loaded
     add_markers { markers: Vec<MarkerInfo> },
     /// Reloads the waveform from disk if this is possible for the current waveform format.
+    ///
     /// If it is not possible, this has no effect.
     /// Responds instantly with [`WcpResponse::ack`]
     /// Once the waveforms have been loaded, a separate event is triggered
     reload,
-    /// Moves the viewport to center it on the specified timestamp. Does not affect the zoom
-    /// level.
+    /// Moves the viewport to center it on the specified timestamp.
+    ///
+    /// Does not affect the zoom level.
     /// Responds with [`WcpResponse::ack`]
     set_viewport_to {
         #[serde(deserialize_with = "deserialize_timestamp")]
         timestamp: BigInt,
     },
-    /// Moves the viewport to center it on the specified timestamps range. Does affect the zoom
-    /// level.
+    /// Moves the viewport to center it on the specified timestamps range.
+    ///
+    /// Does affect the zoom level.
     /// Responds with [`WcpResponse::ack`]
     set_viewport_range {
         #[serde(deserialize_with = "deserialize_timestamp")]
@@ -181,6 +186,13 @@ pub enum WcpCommand {
     /// Zooms out fully to fit the whole waveform in the view
     /// Responds instantly with [`WcpResponse::ack`]
     zoom_to_fit { viewport_idx: usize },
+    /// Set the cursor to the given time.
+    /// Responds instantly with [`WcpResponse::ack`]
+    set_cursor {
+        #[serde(deserialize_with = "deserialize_timestamp")]
+        #[serde(serialize_with = "serialize_timestamp")]
+        timestamp: BigInt,
+    },
     /// Shut down the WCP server.
     // FIXME: What does this mean? Does it kill the server, the current connection or surfer itself?
     shutdown,
@@ -229,4 +241,15 @@ where
             "Error during deserialization of timestamp value {num}"
         )))
     }
+}
+
+fn serialize_timestamp<S>(bigint: &BigInt, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u128(
+        bigint
+            .to_u128()
+            .ok_or_else(|| serde::ser::Error::custom("BigInt too large"))?,
+    )
 }

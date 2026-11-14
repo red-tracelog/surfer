@@ -1,5 +1,5 @@
-use num::{BigInt, FromPrimitive};
-use serde::{Deserialize, Deserializer, Serialize, de};
+use num::{BigInt, FromPrimitive, ToPrimitive};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 
 /// A reference to a currently displayed item.
@@ -190,6 +190,7 @@ pub enum WcpCommand {
     /// Responds instantly with [`WcpResponse::ack`]
     set_cursor {
         #[serde(deserialize_with = "deserialize_timestamp")]
+        #[serde(serialize_with = "serialize_timestamp")]
         timestamp: BigInt,
     },
     /// Shut down the WCP server.
@@ -240,4 +241,15 @@ where
             "Error during deserialization of timestamp value {num}"
         )))
     }
+}
+
+fn serialize_timestamp<S>(bigint: &BigInt, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u128(
+        bigint
+            .to_u128()
+            .ok_or_else(|| serde::ser::Error::custom("BigInt too large"))?,
+    )
 }

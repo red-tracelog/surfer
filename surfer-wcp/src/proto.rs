@@ -153,6 +153,7 @@ pub enum WcpCommand {
     /// Responds with [`WcpResponse::ack`]
     set_viewport_to {
         #[serde(deserialize_with = "deserialize_timestamp")]
+        #[serde(serialize_with = "serialize_timestamp")]
         timestamp: BigInt,
     },
     /// Moves the viewport to center it on the specified timestamps range.
